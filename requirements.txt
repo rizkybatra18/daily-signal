@@ -5,7 +5,7 @@
 yfinance==0.2.51
 pandas==2.2.3
 numpy==2.1.3
-pandas-ta==0.3.14b0
+pandas-ta
 
 # ── Database ───────────────────────────────────────────────────
 supabase==2.11.0
