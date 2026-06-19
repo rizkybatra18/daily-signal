@@ -1,0 +1,54 @@
+name: "Daily Signal — Weekly Maintenance"
+
+on:
+  schedule:
+    # Sabtu pagi: 02:00 UTC = 09:00 WIB
+    - cron: "0 2 * * 6"
+  workflow_dispatch:
+
+jobs:
+  weekly_maintenance:
+    name: "Weekly Maintenance"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: "🧹 Database Cleanup (hapus log lama)"
+        run: python -m src.runner db_cleanup
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+      - name: "🌐 Refresh Universe (deteksi IPO/delisting)"
+        run: python -m src.runner refresh_universe
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: "🔬 Run Backtests (top 50 saham)"
+        run: python -m src.runner run_backtests --limit 50
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        continue-on-error: true
+        timeout-minutes: 20
+
+      - name: "📊 Weekly Performance Report"
+        run: python -m src.runner weekly_report
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        continue-on-error: true
