@@ -5,7 +5,7 @@
 yfinance==0.2.51
 pandas==2.2.3
 numpy==2.1.3
-pandas_ta
+git+https://github.com/twopirllc/pandas-ta.git
 
 # ── Database ───────────────────────────────────────────────────
 supabase==2.11.0
