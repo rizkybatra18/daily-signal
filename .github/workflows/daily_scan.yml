@@ -1,0 +1,113 @@
+name: "Daily Signal — Daily Scan"
+
+on:
+  schedule:
+    # Post-market scan: 10:30 UTC = 17:30 WIB (setelah market tutup 16:30 WIB)
+    - cron: "30 10 * * 1-5"   # Senin-Jumat
+
+    # Pre-market alert: 01:30 UTC = 08:30 WIB
+    - cron: "30 1 * * 1-5"
+
+  workflow_dispatch:           # Manual trigger via GitHub UI
+    inputs:
+      mode:
+        description: "Mode: full_scan | pre_market | health_check"
+        required: true
+        default: "full_scan"
+        type: choice
+        options:
+          - full_scan
+          - pre_market
+          - health_check
+
+env:
+  PYTHON_VERSION: "3.11"
+  TZ: "Asia/Jakarta"
+
+jobs:
+  daily_scan:
+    name: "Daily Market Scan"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45        # Batas waktu 45 menit untuk free tier
+
+    steps:
+      - name: "📥 Checkout Repository"
+        uses: actions/checkout@v4
+
+      - name: "🐍 Setup Python ${{ env.PYTHON_VERSION }}"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: "📦 Install Dependencies"
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "🔧 Create .env dari Secrets"
+        run: |
+          cat > .env << EOF
+          SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY=${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+          APP_ENV=production
+          LOG_LEVEL=INFO
+          TZ=Asia/Jakarta
+          EOF
+
+      - name: "📁 Create Logs Directory"
+        run: mkdir -p logs
+
+      - name: "🏥 Health Check"
+        run: python -m src.runner health_check
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: "🌅 Pre-Market Alert (08:30 WIB)"
+        if: github.event.schedule == '30 1 * * 1-5' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'pre_market')
+        run: python -m src.runner pre_market
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: "📊 Full Daily Scan (17:30 WIB)"
+        if: github.event.schedule == '30 10 * * 1-5' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'full_scan')
+        run: python -m src.runner daily_scan
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: "💼 Update Portfolio Prices"
+        if: github.event.schedule == '30 10 * * 1-5'
+        run: python -m src.runner update_portfolio
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        continue-on-error: true   # Jangan gagalkan workflow jika ini error
+
+      - name: "📸 Save Portfolio Snapshot"
+        if: github.event.schedule == '30 10 * * 1-5'
+        run: python -m src.runner portfolio_snapshot
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        continue-on-error: true
+
+      - name: "📋 Upload Logs sebagai Artifact"
+        uses: actions/upload-artifact@v4
+        if: always()             # Upload meskipun ada error
+        with:
+          name: scan-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 7
