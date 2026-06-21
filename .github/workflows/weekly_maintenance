@@ -20,7 +20,10 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - run: pip install -r requirements.txt
+      - run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          python -c "import yfinance, pandas, numpy, supabase; print('✅ Dependencies OK')"
 
       - name: "🧹 Database Cleanup (hapus log lama)"
         run: python -m src.runner db_cleanup
