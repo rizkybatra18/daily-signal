@@ -44,6 +44,8 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
+          # Verifikasi paket-paket kritis berhasil terinstall
+          python -c "import yfinance, pandas, numpy, supabase, requests, loguru, tenacity; print('✅ Semua dependency OK')"
 
       - name: "🔧 Create .env dari Secrets"
         run: |
