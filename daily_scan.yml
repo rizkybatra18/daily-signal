@@ -1,0 +1,96 @@
+name: "Daily Signal — Daily Scan"
+
+on:
+  schedule:
+    # Post-market scan: 10:30 UTC = 17:30 WIB (setelah market tutup 16:30 WIB)
+    - cron: "30 10 * * 1-5"
+    # Pre-market alert: 01:30 UTC = 08:30 WIB
+    - cron: "30 1 * * 1-5"
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Mode: full_scan | pre_market | health_check"
+        required: true
+        default: "full_scan"
+        type: choice
+        options:
+          - full_scan
+          - pre_market
+          - health_check
+
+env:
+  PYTHON_VERSION: "3.11"
+  TZ: "Asia/Jakarta"
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+  APP_ENV: production
+  LOG_LEVEL: INFO
+
+jobs:
+  daily_scan:
+    name: "Daily Market Scan"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: "📥 Checkout Repository"
+        uses: actions/checkout@v4
+
+      - name: "🐍 Setup Python ${{ env.PYTHON_VERSION }}"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: "📦 Install Dependencies"
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          python -c "import yfinance, pandas, numpy, supabase, requests, loguru, tenacity; print('✅ Semua dependency OK')"
+
+      - name: "📁 Create Logs Directory"
+        run: mkdir -p logs
+
+      # ── Health Check ──────────────────────────────────────────────
+      # Health check hanya exit(1) jika DATABASE tidak bisa diakses.
+      # Telegram atau Yahoo Finance bermasalah: warning saja, workflow lanjut.
+      - name: "🏥 Health Check"
+        run: python -m src.runner health_check
+
+      # ── Pre-Market (08:30 WIB) ────────────────────────────────────
+      - name: "🌅 Pre-Market Alert (08:30 WIB)"
+        if: |
+          github.event.schedule == '30 1 * * 1-5' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'pre_market')
+        run: python -m src.runner pre_market
+        continue-on-error: true
+
+      # ── Full Daily Scan (17:30 WIB) ───────────────────────────────
+      - name: "📊 Full Daily Scan (17:30 WIB)"
+        if: |
+          github.event.schedule == '30 10 * * 1-5' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'full_scan')
+        run: python -m src.runner daily_scan
+
+      # ── Portfolio Update (setelah scan) ───────────────────────────
+      - name: "💼 Update Portfolio Prices"
+        if: github.event.schedule == '30 10 * * 1-5'
+        run: python -m src.runner update_portfolio
+        continue-on-error: true
+
+      - name: "📸 Save Portfolio Snapshot"
+        if: github.event.schedule == '30 10 * * 1-5'
+        run: python -m src.runner portfolio_snapshot
+        continue-on-error: true
+
+      # ── Logs ──────────────────────────────────────────────────────
+      - name: "📋 Upload Logs"
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scan-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 7
