@@ -5,7 +5,6 @@ Singleton connection dengan retry dan health check.
 
 import os
 import time
-from functools import lru_cache
 from typing import Optional
 from supabase import create_client, Client
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -35,33 +34,73 @@ def get_db() -> Client:
     return _db_client
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type(Exception),
-)
 def health_check() -> dict:
     """
     Cek koneksi ke database.
+    Menggunakan query ke tabel 'stocks' yang pasti ada setelah migrasi.
     Return dict dengan status dan latency.
     """
     start = time.time()
     try:
         db = get_db()
-        # Query ringan untuk health check
-        result = db.table("system_logs").select("id").limit(1).execute()
+        # Coba query ke tabel stocks (lebih aman dari system_logs karena tidak butuh data)
+        # count=exact menghindari error PGRST125 (invalid path) yang muncul
+        # jika tabel kosong dan kita pakai select("id")
+        result = db.table("stocks").select("ticker", count="exact").limit(1).execute()
         latency_ms = int((time.time() - start) * 1000)
         return {
             "status": "healthy",
             "latency_ms": latency_ms,
+            "table_check": "stocks",
         }
     except Exception as e:
+        err_str = str(e)
         latency_ms = int((time.time() - start) * 1000)
+
+        # Diagnosis lebih spesifik untuk error umum
+        if "PGRST125" in err_str or "Invalid path" in err_str:
+            hint = "Kemungkinan migration SQL belum dijalankan di Supabase. Buka SQL Editor Supabase dan jalankan migrations/001_initial_schema.sql"
+        elif "Invalid API key" in err_str or "401" in err_str:
+            hint = "SUPABASE_SERVICE_KEY tidak valid. Cek kembali value secret di GitHub."
+        elif "connection" in err_str.lower():
+            hint = "Tidak bisa connect ke Supabase. Cek SUPABASE_URL."
+        else:
+            hint = err_str[:200]
+
         return {
             "status": "unhealthy",
             "latency_ms": latency_ms,
-            "error": str(e),
+            "error": hint,
         }
+
+
+def ensure_tables_exist() -> bool:
+    """
+    Cek apakah tabel-tabel utama sudah ada.
+    Dipanggil sekali saat startup untuk diagnosa masalah migration.
+    Return True jika semua tabel ada.
+    """
+    required_tables = ["stocks", "daily_prices", "signals", "market_regimes", "scan_runs"]
+    try:
+        db = get_db()
+        missing = []
+        for tbl in required_tables:
+            try:
+                db.table(tbl).select("*", count="exact").limit(0).execute()
+            except Exception:
+                missing.append(tbl)
+
+        if missing:
+            from src.core.logger import get_logger
+            log = get_logger("database")
+            log.error(
+                f"Tabel berikut tidak ditemukan di Supabase: {missing}. "
+                f"Jalankan migrations/001_initial_schema.sql di Supabase SQL Editor!"
+            )
+            return False
+        return True
+    except Exception:
+        return False
 
 
 def upsert_stock(ticker: str, data: dict) -> bool:
@@ -113,7 +152,6 @@ def bulk_insert_prices(records: list[dict]) -> int:
         return 0
     try:
         db = get_db()
-        # Batch 500 records per call untuk menghindari timeout
         total_inserted = 0
         batch_size = 500
         for i in range(0, len(records), batch_size):
@@ -180,7 +218,6 @@ def get_active_signals_for_monitoring() -> list[dict]:
     """Dapatkan sinyal BUY/SELL yang belum closed untuk monitoring."""
     try:
         db = get_db()
-        # Sinyal 7 hari terakhir yang belum ada SL/TP2 hit
         result = (
             db.table("signals")
             .select("*, signal_updates(update_type)")
