@@ -51,8 +51,12 @@ def _send_message(
     chat_id = chat_id or settings.telegram_chat_id
 
     if not token or not chat_id:
-        log.warning("Telegram token atau chat_id belum dikonfigurasi")
+        log.error(
+            f"Telegram TIDAK terkonfigurasi! "            f"token={'SET' if token else 'KOSONG'} "            f"chat_id={'SET' if chat_id else 'KOSONG'}. "            f"Pastikan TELEGRAM_BOT_TOKEN dan TELEGRAM_CHAT_ID "            f"sudah diisi di GitHub Secrets."
+        )
         return False
+    
+    log.info(f"Mengirim ke Telegram chat_id={chat_id[:6]}...")
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
