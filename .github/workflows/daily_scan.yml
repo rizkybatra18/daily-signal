@@ -2,12 +2,8 @@ name: "Daily Signal — Daily Scan"
 
 on:
   schedule:
-    # Pre-market alert: 01:30 UTC = 08:30 WIB
-    # CATATAN: GitHub Actions cron bisa delay 15-30 menit di free tier
-    - cron: "30 1 * * 1-5"
-
-    # Post-market scan: 10:30 UTC = 17:30 WIB
-    - cron: "30 10 * * 1-5"
+    - cron: "30 1 * * 1-5"    # 08:30 WIB pre-market
+    - cron: "30 10 * * 1-5"   # 17:30 WIB post-market scan
 
   workflow_dispatch:
     inputs:
@@ -21,70 +17,76 @@ on:
           - pre_market
           - health_check
 
-env:
-  PYTHON_VERSION: "3.11"
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-  APP_ENV: production
-  LOG_LEVEL: INFO
-
 jobs:
 
   # ══════════════════════════════════════════════════════════════
-  # JOB 1 — PRE-MARKET (08:30 WIB / 01:30 UTC)
-  # Pisah menjadi job sendiri agar tidak butuh kondisi 'if' yang rumit
+  # JOB 1 — PRE-MARKET (08:30 WIB)
   # ══════════════════════════════════════════════════════════════
   pre_market:
     name: "🌅 Pre-Market Alert (08:30 WIB)"
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Job ini HANYA jalan saat cron 01:30 UTC atau manual mode=pre_market
     if: |
       github.event.schedule == '30 1 * * 1-5' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'pre_market')
+
+    # ← env di level JOB, bukan workflow — ini yang benar
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      APP_ENV: production
+      LOG_LEVEL: INFO
 
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: "3.11"
           cache: "pip"
       - name: "📦 Install"
         run: pip install --upgrade pip && pip install -r requirements.txt
-      - name: "📁 Logs dir"
+      - name: "📁 Logs"
         run: mkdir -p logs
-      - name: "🌅 Kirim Pre-Market Alert"
+      - name: "🌅 Pre-Market Alert"
         run: python -m src.runner pre_market
         continue-on-error: true
 
   # ══════════════════════════════════════════════════════════════
-  # JOB 2 — FULL DAILY SCAN (17:30 WIB / 10:30 UTC)
+  # JOB 2 — FULL DAILY SCAN (17:30 WIB)
   # ══════════════════════════════════════════════════════════════
   daily_scan:
     name: "📊 Full Daily Scan (17:30 WIB)"
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # Job ini HANYA jalan saat cron 10:30 UTC atau manual mode=full_scan
     if: |
       github.event.schedule == '30 10 * * 1-5' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'full_scan')
+
+    # ← env di level JOB
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      APP_ENV: production
+      LOG_LEVEL: INFO
 
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: "3.11"
           cache: "pip"
 
       - name: "📦 Install Dependencies"
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          python -c "import yfinance, pandas, numpy, supabase, requests, loguru, tenacity; print('✅ Dependencies OK')"
+          python -c "import yfinance, pandas, numpy, supabase, requests; print('✅ OK')"
 
-      - name: "📁 Create Logs Directory"
+      - name: "📁 Logs Directory"
         run: mkdir -p logs
 
       - name: "🏥 Health Check"
@@ -93,11 +95,11 @@ jobs:
       - name: "📊 Full Daily Scan"
         run: python -m src.runner daily_scan
 
-      - name: "💼 Update Portfolio Prices"
+      - name: "💼 Update Portfolio"
         run: python -m src.runner update_portfolio
         continue-on-error: true
 
-      - name: "📸 Save Portfolio Snapshot"
+      - name: "📸 Portfolio Snapshot"
         run: python -m src.runner portfolio_snapshot
         continue-on-error: true
 
@@ -118,11 +120,19 @@ jobs:
     timeout-minutes: 5
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'health_check'
 
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      APP_ENV: production
+      LOG_LEVEL: INFO
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: "3.11"
           cache: "pip"
       - run: pip install --upgrade pip && pip install -r requirements.txt
       - run: mkdir -p logs
