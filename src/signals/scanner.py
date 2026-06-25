@@ -99,7 +99,8 @@ def run_daily_scan(
         ihsg_close = ihsg_df["close"] if ihsg_df is not None else None
         
         # Parallel load OHLCV dari database
-        stock_data = _load_batch_from_db(all_tickers, days=settings.history_days_scan)
+        # Minta 252 hari agar EMA200 bisa dihitung dengan benar
+        stock_data = _load_batch_from_db(all_tickers, days=252)
         log.info(f"     → {len(stock_data)} saham berhasil di-load")
         
         # ── Step 6: Sector Rotation ────────────────────────────────
@@ -147,8 +148,8 @@ def run_daily_scan(
             log.info(f"✓ {len(signal_ids)} sinyal tersimpan")
         
         # ── Kirim ke Telegram ─────────────────────────────────────
-        if send_telegram and top_signals:
-            from src.telegram.bot import send_daily_signals
+        # Selalu kirim — termasuk saat top_signals kosong
+        if send_telegram:
             _send_signals_telegram(top_signals, regime, sector_rankings)
         
         # ── Finish ────────────────────────────────────────────────
@@ -213,7 +214,7 @@ def _load_batch_from_db(
     results = {}
     
     def load_one(ticker):
-        df = get_ohlcv_from_db(ticker, days=days + 50)  # +50 untuk warmup indikator
+        df = get_ohlcv_from_db(ticker, days=days)
         return ticker, df
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
