@@ -307,6 +307,10 @@ class IncrementalDataUpdater:
                 "change_pct": round(change_pct, 4) if change_pct is not None else None,
             })
 
+        # Daftarkan ticker ke tabel stocks dulu (cegah FK violation)
+        from src.core.database import ensure_stocks_registered
+        ensure_stocks_registered([ticker])
+
         rows_added = bulk_insert_prices(records)
         last_date = df.index[-1].date().isoformat() if not df.empty else last_date_str
 
