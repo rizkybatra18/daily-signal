@@ -77,6 +77,12 @@ def run_daily_scan(
         
         # ── Step 2: Update Data Incremental ───────────────────────
         log.info("[2/7] Update data harga (incremental)...")
+        # Daftarkan semua ticker ke tabel stocks sebelum insert prices
+        # Ini mencegah FK violation (23503) karena daily_prices reference stocks
+        from src.core.database import ensure_stocks_registered
+        n_registered = ensure_stocks_registered(all_tickers)
+        if n_registered > 0:
+            log.info(f"     → {n_registered} ticker baru didaftarkan ke tabel stocks")
         updater = IncrementalDataUpdater()
         update_summary = updater.update_batch(all_tickers, max_workers=5)
         log.info(f"     → {update_summary['updated']} diupdate, +{update_summary['rows_added']} rows")
