@@ -121,6 +121,53 @@ def upsert_stock(ticker: str, data: dict) -> bool:
         return False
 
 
+
+def ensure_stocks_registered(tickers: list[str]) -> int:
+    """
+    Pastikan semua ticker terdaftar di tabel stocks sebelum insert prices.
+    Ini mencegah FK violation (23503) karena daily_prices reference stocks.
+    Return jumlah ticker yang baru didaftarkan.
+    """
+    if not tickers:
+        return 0
+    try:
+        db = get_db()
+        # Cek ticker mana yang belum ada
+        result = db.table("stocks").select("ticker").in_("ticker", tickers).execute()
+        existing = {r["ticker"] for r in (result.data or [])}
+        missing  = [t for t in tickers if t not in existing]
+
+        if not missing:
+            return 0
+
+        # Insert ticker yang belum ada
+        records = [
+            {
+                "ticker":      t,
+                "ticker_clean": t.replace(".JK", ""),
+                "name":        t.replace(".JK", ""),
+                "is_active":   True,
+                "is_delisted": False,
+            }
+            for t in missing
+        ]
+        # Batch 100 per call
+        for i in range(0, len(records), 100):
+            db.table("stocks").upsert(
+                records[i:i+100], on_conflict="ticker"
+            ).execute()
+
+        from src.core.logger import get_logger
+        log = get_logger("database")
+        log.info(f"✓ {len(missing)} ticker baru didaftarkan ke tabel stocks")
+        return len(missing)
+
+    except Exception as e:
+        from src.core.logger import get_logger
+        log = get_logger("database")
+        log.error(f"ensure_stocks_registered gagal: {e}")
+        return 0
+
 def get_last_price_date(ticker: str) -> Optional[str]:
     """
     Dapatkan tanggal candle terakhir yang tersimpan di database.
