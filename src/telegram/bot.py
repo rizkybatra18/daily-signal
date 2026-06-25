@@ -365,20 +365,70 @@ Status: <b>{overall.upper()}</b>
 
 
 def send_market_open_alert(regime) -> bool:
-    """Kirim alert saat market akan buka (08:30 WIB)."""
+    """
+    Kirim alert pre-market (08:30 WIB).
+    Berisi: kondisi IHSG + top sinyal dari scan kemarin.
     
+    CATATAN: Ini BUKAN sinyal baru — ini reminder sinyal dari kemarin
+    yang masih aktif, plus kondisi market hari ini.
+    Sinyal BARU dikirim jam 17:30 WIB setelah market tutup.
+    """
     emoji = REGIME_EMOJI.get(regime.regime, "📊")
-    
+    regime_color_text = {
+        "BULL": "✅ Kondisi bagus untuk trading",
+        "SIDEWAYS": "⚠️ Selektif — pilih yang paling kuat",
+        "BEAR": "🚫 Hati-hati — kurangi exposure",
+    }.get(regime.regime, "")
+
+    # Ambil sinyal aktif dari kemarin (jika ada)
+    active_signals_text = ""
+    try:
+        from src.core.database import get_db
+        from datetime import date, timedelta
+        db = get_db()
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        result = (
+            db.table("signals")
+            .select("ticker, signal_type, composite_score, entry_price, stop_loss, target_1")
+            .in_("signal_type", ["STRONG_BUY", "BUY"])
+            .gte("signal_date", yesterday)
+            .order("composite_score", desc=True)
+            .limit(5)
+            .execute()
+        )
+        if result.data:
+            lines = []
+            for s in result.data:
+                ticker = s["ticker"].replace(".JK", "")
+                sig = s["signal_type"].replace("_", " ")
+                score = s.get("composite_score", 0)
+                emoji_s = "🚀" if s["signal_type"] == "STRONG_BUY" else "🟢"
+                lines.append(f"  {emoji_s} <b>{ticker}</b> {sig} (Score:{score:.0f})")
+            active_signals_text = (
+                "
+📋 <b>Sinyal Aktif dari Kemarin:</b>
+"
+                + "
+".join(lines)
+                + "
+"
+            )
+    except Exception:
+        pass  # Tidak ada sinyal kemarin — tidak masalah
+
     msg = f"""🔔 <b>MARKET AKAN BUKA</b>
 {_now_wib()}
 ━━━━━━━━━━━━━━━━━━━━━━
 {emoji} Regime: <b>{regime.regime}</b>
-📍 IHSG Kemarin: Rp{regime.ihsg_close:,.0f}
-📊 RSI IHSG: {regime.ihsg_rsi:.1f}
-🔄 5D Change: {regime.change_5d:+.1f}%
+{regime_color_text}
 
-<i>Scan post-market akan dikirim setelah market tutup.</i>"""
-    
+📍 IHSG Terakhir : Rp{regime.ihsg_close:,.0f}
+📊 RSI IHSG      : {regime.ihsg_rsi:.1f}
+🔄 Change 5 Hari : {regime.change_5d:+.1f}%
+{active_signals_text}
+━━━━━━━━━━━━━━━━━━━━━━
+<i>⏰ Sinyal baru hari ini dikirim ~17:30 WIB</i>"""
+
     return _send_message(msg)
 
 
