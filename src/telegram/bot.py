@@ -182,7 +182,7 @@ def _format_regime_header(regime) -> str:
         "\n"
         f"{emoji} <b>Market Regime: {regime.regime}</b>\n"
         f"📍 IHSG: Rp{regime.ihsg_close:,.0f} | RSI: {regime.ihsg_rsi:.0f}\n"
-        f"📊 5D: {regime.change_5d:+.1f}% | {regime.regime_reason[:60]}\n"
+        f"📊 5D: {regime.change_5d:+.1f}% | {regime.regime_reason[:60].replace("<","&lt;").replace(">","&gt;")}\n"
         "\n"
     )
 
