@@ -230,26 +230,69 @@ def run_daily_scan(
 def _load_batch_from_db(
     tickers: list[str],
     days: int = 252,
-    max_workers: int = 3,
+    max_workers: int = 3,  # tidak dipakai lagi, kept for compatibility
 ) -> dict[str, pd.DataFrame]:
-    """Load OHLCV data dari database secara parallel."""
-    results = {}
-    
-    def load_one(ticker):
-        df = get_ohlcv_from_db(ticker, days=days)
-        return ticker, df
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(load_one, t): t for t in tickers}
-        
-        for future in concurrent.futures.as_completed(futures, timeout=120):
+    """
+    Load OHLCV semua ticker dalam batch query ke Supabase.
+    Gunakan IN clause (60 ticker per batch) bukan N query paralel.
+    Satu koneksi, satu round-trip — tidak ada ServerDisconnected.
+    """
+    import time as _time
+    from datetime import date as _date
+    from src.core.database import get_db
+
+    if not tickers:
+        return {}
+
+    results     = {}
+    start_date  = (_date.today() - timedelta(days=days)).isoformat()
+    all_rows    = []
+    batch_size  = 60   # aman untuk URL length Supabase
+
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i:i + batch_size]
+        for attempt in range(3):
             try:
-                ticker, df = future.result()
-                if df is not None and not df.empty:
-                    results[ticker] = df
+                db = get_db()
+                res = (
+                    db.table("daily_prices")
+                    .select("ticker, trade_date, open, high, low, close, volume")
+                    .in_("ticker", batch)
+                    .gte("trade_date", start_date)
+                    .order("trade_date")
+                    .execute()
+                )
+                all_rows.extend(res.data or [])
+                _time.sleep(0.3)   # jeda antar batch
+                break
             except Exception as e:
-                log.debug(f"Load DB gagal untuk {futures[future]}: {e}")
-    
+                if attempt < 2:
+                    _time.sleep((attempt + 1) * 1.5)
+                else:
+                    log.warning(
+                        f"Batch {i//batch_size+1} gagal load setelah 3x: {str(e)[:80]}"
+                    )
+
+    if not all_rows:
+        log.warning("Tidak ada data OHLCV berhasil di-load dari database")
+        return {}
+
+    # Pisah per ticker di Python — tidak perlu koneksi lagi
+    df_all = pd.DataFrame(all_rows)
+    df_all["trade_date"] = pd.to_datetime(df_all["trade_date"])
+
+    for ticker in tickers:
+        df_t = df_all[df_all["ticker"] == ticker].copy()
+        if df_t.empty:
+            continue
+        df_t = df_t.drop(columns=["ticker"]).set_index("trade_date")
+        for col in ["open", "high", "low", "close", "volume"]:
+            if col in df_t.columns:
+                df_t[col] = pd.to_numeric(df_t[col], errors="coerce")
+        df_t = df_t.dropna(subset=["close"])
+        if not df_t.empty:
+            results[ticker] = df_t
+
     return results
 
 
