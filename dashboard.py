@@ -222,7 +222,7 @@ def load_logs(lim=50):
 def render_sidebar():
     with st.sidebar:
         st.markdown("## 📈 DAILY SIGNAL")
-        st.markdown("*BEI Stock Scanner v2.0*")
+        st.markdown("*SINYAL DARI LANGIT*")
         st.divider()
         page = st.radio("nav", [
             "🏠  Market Overview",
