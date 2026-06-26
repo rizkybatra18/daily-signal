@@ -128,39 +128,53 @@ def ensure_stocks_registered(tickers: list[str]) -> int:
     Ini mencegah FK violation (23503) karena daily_prices reference stocks.
     Return jumlah ticker yang baru didaftarkan.
     """
+    import time as _time
     if not tickers:
         return 0
     try:
         db = get_db()
-        # Cek ticker mana yang belum ada
-        result = db.table("stocks").select("ticker").in_("ticker", tickers).execute()
-        existing = {r["ticker"] for r in (result.data or [])}
-        missing  = [t for t in tickers if t not in existing]
+        # Query dalam batch kecil untuk hindari timeout Supabase nano
+        existing = set()
+        batch_size = 50
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i:i+batch_size]
+            try:
+                result = db.table("stocks").select("ticker").in_("ticker", batch).execute()
+                existing.update(r["ticker"] for r in (result.data or []))
+                _time.sleep(0.1)  # Jeda kecil antar query
+            except Exception:
+                pass  # Skip batch ini, akan dicoba saat insert
 
+        missing = [t for t in tickers if t not in existing]
         if not missing:
             return 0
 
-        # Insert ticker yang belum ada
+        # Insert batch kecil dengan jeda
         records = [
             {
-                "ticker":      t,
+                "ticker":       t,
                 "ticker_clean": t.replace(".JK", ""),
-                "name":        t.replace(".JK", ""),
-                "is_active":   True,
-                "is_delisted": False,
+                "name":         t.replace(".JK", ""),
+                "is_active":    True,
+                "is_delisted":  False,
             }
             for t in missing
         ]
-        # Batch 100 per call
-        for i in range(0, len(records), 100):
-            db.table("stocks").upsert(
-                records[i:i+100], on_conflict="ticker"
-            ).execute()
+        inserted = 0
+        for i in range(0, len(records), 50):
+            try:
+                db.table("stocks").upsert(
+                    records[i:i+50], on_conflict="ticker"
+                ).execute()
+                inserted += len(records[i:i+50])
+                _time.sleep(0.2)  # Jeda antar batch untuk Supabase nano
+            except Exception as e2:
+                pass  # Log tapi lanjut
 
         from src.core.logger import get_logger
         log = get_logger("database")
-        log.info(f"✓ {len(missing)} ticker baru didaftarkan ke tabel stocks")
-        return len(missing)
+        log.info(f"✓ {inserted} ticker baru didaftarkan ke tabel stocks")
+        return inserted
 
     except Exception as e:
         from src.core.logger import get_logger
@@ -192,43 +206,64 @@ def get_last_price_date(ticker: str) -> Optional[str]:
 
 def bulk_insert_prices(records: list[dict]) -> int:
     """
-    Bulk insert harga harian. Return jumlah record yang berhasil diinsert.
-    Menggunakan upsert untuk handle duplikat.
+    Bulk insert harga harian dengan batch kecil + retry.
+    Batch 100 (bukan 500) untuk hindari ConnectionTerminated di Supabase nano.
     """
+    import time as _time
     if not records:
         return 0
-    try:
-        db = get_db()
-        total_inserted = 0
-        batch_size = 500
-        for i in range(0, len(records), batch_size):
-            batch = records[i:i + batch_size]
-            db.table("daily_prices").upsert(
-                batch,
-                on_conflict="ticker,trade_date"
-            ).execute()
-            total_inserted += len(batch)
-        return total_inserted
-    except Exception as e:
-        from src.core.logger import get_logger
-        log = get_logger("database")
-        log.error(f"Gagal bulk insert prices: {e}", exc=e)
-        return 0
+
+    db = get_db()
+    total_inserted = 0
+    batch_size = 100  # Kecil agar tidak overload Supabase nano
+
+    for i in range(0, len(records), batch_size):
+        batch = records[i:i + batch_size]
+        # Retry 3x per batch
+        for attempt in range(3):
+            try:
+                db.table("daily_prices").upsert(
+                    batch,
+                    on_conflict="ticker,trade_date"
+                ).execute()
+                total_inserted += len(batch)
+                _time.sleep(0.1)  # Jeda kecil antar batch
+                break
+            except Exception as e:
+                err_str = str(e)
+                if attempt < 2:
+                    wait = (attempt + 1) * 1.0
+                    _time.sleep(wait)
+                    continue
+                # Attempt terakhir gagal - log tapi jangan crash
+                from src.core.logger import get_logger
+                log = get_logger("database")
+                log.error(f"Gagal bulk insert prices: {err_str[:200]}")
+                break
+
+    return total_inserted
 
 
 def save_signal(signal_data: dict) -> Optional[str]:
-    """Simpan sinyal ke database. Return signal_id atau None."""
-    try:
-        db = get_db()
-        result = db.table("signals").insert(signal_data).execute()
-        if result.data:
-            return result.data[0]["id"]
-        return None
-    except Exception as e:
-        from src.core.logger import get_logger
-        log = get_logger("database")
-        log.error(f"Gagal save signal: {e}", exc=e)
-        return None
+    """Simpan sinyal ke database dengan retry. Return signal_id atau None."""
+    import time as _time
+    for attempt in range(3):
+        try:
+            db = get_db()
+            result = db.table("signals").insert(signal_data).execute()
+            if result.data:
+                return result.data[0]["id"]
+            return None
+        except Exception as e:
+            err_str = str(e)
+            if attempt < 2 and "ConnectionTerminated" in err_str:
+                _time.sleep((attempt + 1) * 0.5)
+                continue
+            from src.core.logger import get_logger
+            log = get_logger("database")
+            log.error(f"Gagal save signal: {err_str[:200]}")
+            return None
+    return None
 
 
 def save_market_regime(regime_data: dict) -> bool:
