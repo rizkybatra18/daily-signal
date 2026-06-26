@@ -376,36 +376,39 @@ class IncrementalDataUpdater:
 
 
 def get_ohlcv_from_db(ticker: str, days: int = 252) -> Optional[pd.DataFrame]:
-    """Ambil data OHLCV dari database."""
-    try:
-        from src.core.database import get_db
-        from datetime import date
-        db = get_db()
+    """Ambil data OHLCV dari database dengan retry."""
+    import time as _time
+    from src.core.database import get_db
+    from datetime import date
 
-        start_date = (date.today() - timedelta(days=days)).isoformat()
+    start_date = (date.today() - timedelta(days=days)).isoformat()
 
-        result = (
-            db.table("daily_prices")
-            .select("trade_date, open, high, low, close, volume")
-            .eq("ticker", ticker)
-            .gte("trade_date", start_date)
-            .order("trade_date")
-            .execute()
-        )
+    for attempt in range(3):
+        try:
+            db = get_db()
+            result = (
+                db.table("daily_prices")
+                .select("trade_date, open, high, low, close, volume")
+                .eq("ticker", ticker)
+                .gte("trade_date", start_date)
+                .order("trade_date")
+                .execute()
+            )
+            if not result.data:
+                return None
 
-        if not result.data:
+            df = pd.DataFrame(result.data)
+            df["trade_date"] = pd.to_datetime(df["trade_date"])
+            df = df.set_index("trade_date")
+            for col in ["open", "high", "low", "close", "volume"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            df = df.dropna(subset=["close"])
+            return df if not df.empty else None
+
+        except Exception as e:
+            if attempt < 2:
+                _time.sleep((attempt + 1) * 1.0)
+                continue
+            log.error(f"DB fetch OHLCV gagal untuk {ticker}: {str(e)[:100]}")
             return None
-
-        df = pd.DataFrame(result.data)
-        df["trade_date"] = pd.to_datetime(df["trade_date"])
-        df = df.set_index("trade_date")
-        df = df.astype({
-            "open": float, "high": float, "low": float,
-            "close": float, "volume": float,
-        })
-
-        return df if not df.empty else None
-
-    except Exception as e:
-        log.error(f"DB fetch OHLCV gagal untuk {ticker}: {e}")
-        return None
+    return None
