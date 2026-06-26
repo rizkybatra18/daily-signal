@@ -324,10 +324,12 @@ class IncrementalDataUpdater:
     def update_batch(
         self,
         tickers: list[str],
-        max_workers: int = 5,
+        max_workers: int = 2,   # Supabase nano free tier: maks 2 koneksi paralel
     ) -> dict:
         """Update data semua ticker secara paralel."""
-        log.info(f"Incremental update untuk {len(tickers)} ticker...")
+        # max_workers=2 untuk Supabase free tier (nano) yang max ~20 koneksi aktif
+        # Terlalu banyak paralel → ConnectionTerminated
+        log.info(f"Incremental update untuk {len(tickers)} ticker (sequential mode untuk Supabase nano)...")
 
         total_added = 0
         updated = 0
