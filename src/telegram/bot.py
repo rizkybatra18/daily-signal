@@ -246,10 +246,17 @@ def send_daily_signals(signals: list, regime, sector_rankings: list = None) -> b
     if not signals:
         r = _ss(getattr(regime, "regime", ""), "")
         if r == "BEAR":
-            parts.append("🚫 <b>Tidak ada sinyal</b>\n")
-            parts.append("<i>Market BEAR — bot menahan sinyal untuk keamanan modal.</i>\n")
+            ihsg_rsi = _sf(getattr(regime, "ihsg_rsi", 50))
+            parts.append("🚫 <b>Tidak ada sinyal BUY hari ini</b>\n")
+            parts.append(
+                "<i>Market sedang BEAR (RSI IHSG "
+                + f"{ihsg_rsi:.0f}"
+                + "). Bot menahan sinyal untuk melindungi modal.\n"
+                + "Tunggu RSI IHSG > 45 atau EMA20 kembali naik sebelum entry.</i>\n"
+            )
         else:
             parts.append("🔍 <b>Tidak ada sinyal yang memenuhi kriteria hari ini.</b>\n")
+            parts.append("<i>Semua saham tidak memenuhi minimum score. Coba lagi besok.</i>\n")
     else:
         parts.append(f"🔍 <b>{len(signals)} SINYAL</b> ({strong_buy} 🚀 STRONG BUY + {buy_count} 🟢 BUY)\n")
         for i, analysis in enumerate(signals, 1):
