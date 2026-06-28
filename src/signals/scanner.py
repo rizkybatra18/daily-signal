@@ -238,7 +238,7 @@ def _load_batch_from_db(
     Satu koneksi, satu round-trip — tidak ada ServerDisconnected.
     """
     import time as _time
-    from datetime import date as _date
+    from datetime import date as _date, timedelta
     from src.core.database import get_db
 
     if not tickers:
