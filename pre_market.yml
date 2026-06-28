@@ -1,0 +1,40 @@
+name: "Daily Signal — Pre-Market Alert"
+
+# Trigger HANYA satu cron — tidak perlu if condition
+on:
+  schedule:
+    - cron: "30 1 * * 1-5"   # 01:30 UTC = 08:30 WIB, Senin-Jumat
+
+  workflow_dispatch:           # Manual trigger untuk test
+
+jobs:
+  pre_market:
+    name: "🌅 Pre-Market Alert"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      APP_ENV: production
+      LOG_LEVEL: INFO
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: "📦 Install"
+        run: pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: "📁 Logs"
+        run: mkdir -p logs
+
+      - name: "🌅 Kirim Pre-Market Alert"
+        run: python -m src.runner pre_market
+        continue-on-error: true   # Jangan gagalkan jika Telegram lambat
