@@ -10,6 +10,13 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import date, timedelta, datetime
+import pytz
+
+_WIB = pytz.timezone("Asia/Jakarta")
+
+def _now_wib() -> datetime:
+    """Waktu sekarang dalam WIB."""
+    return datetime.now(_WIB)
 import os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -222,7 +229,7 @@ def load_logs(lim=50):
 def render_sidebar():
     with st.sidebar:
         st.markdown("## 📈 DAILY SIGNAL")
-        st.markdown("*SINYAL DARI LANGIT*")
+        st.markdown("*BEI Stock Scanner v2.0*")
         st.divider()
         page = st.radio("nav", [
             "🏠  Market Overview",
@@ -251,7 +258,7 @@ def render_sidebar():
         st.divider()
         if st.button("🔄 Refresh", use_container_width=True):
             st.cache_data.clear(); st.rerun()
-        st.caption(f"Update: {datetime.now().strftime('%H:%M WIB')}")
+        st.caption(f"Update: {_now_wib().strftime('%H:%M WIB')}")
     return page
 
 
@@ -259,7 +266,7 @@ def render_sidebar():
 
 def page_market_overview():
     st.title("🏠 Market Overview")
-    st.caption(date.today().strftime("%A, %d %B %Y"))
+    st.caption(_now_wib().strftime("%A, %d %B %Y"))
 
     regime  = load_regime()
     signals = load_signals()
