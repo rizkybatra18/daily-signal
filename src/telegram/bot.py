@@ -372,11 +372,11 @@ def send_tp_sl_notification(
 
 def send_daily_summary(summary: dict) -> bool:
     lines = [
-        "📋 <b>RINGKASAN HARIAN</b>",
+        "📋 <b>RINGKASAN MINGGUAN</b>",
         f"{_now_wib()}",
         "━━━━━━━━━━━━━━━━━━━━━━",
         "",
-        "📊 <b>Hasil Scan Hari Ini:</b>",
+        "📊 <b>Hasil Scan minggu Ini:</b>",
         f"• Saham di-scan : {summary.get('stocks_scanned', 0)}",
         f"• STRONG BUY   : {summary.get('strong_buy', 0)} 🚀",
         f"• BUY          : {summary.get('buy', 0)} 🟢",
