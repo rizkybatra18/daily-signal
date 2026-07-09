@@ -7,7 +7,7 @@ on:
 
   # Fallback: GitHub cron (mungkin delay, tapi ada sebagai backup)
   schedule:
-    - cron:    # 01:30 UTC = 08:30 WIB
+    - cron: "29 1 * * 1-5"   # 01:30 UTC = 08:30 WIB
 
   # Manual trigger untuk test
   workflow_dispatch:
