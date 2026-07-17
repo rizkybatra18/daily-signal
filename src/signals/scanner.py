@@ -387,7 +387,7 @@ def _analyze_all_parallel(
             analysis = apply_basic_filters(analysis)
             return analysis
         except Exception as e:
-            log.debug(f"Analisis gagal {ticker}: {e}")
+            log.exception(f"Analisis gagal {ticker}")
             return None
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -405,7 +405,7 @@ def _analyze_all_parallel(
                 if result is not None:
                     results.append(result)
             except Exception as e:
-                log.debug(f"Analisis error {ticker}: {e}")
+                log.exception(f"Analisis error {ticker}")
             
             if completed % 50 == 0:
                 log.info(f"  Progress: {completed}/{total} saham dianalisis...")
