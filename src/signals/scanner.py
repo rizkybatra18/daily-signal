@@ -367,6 +367,7 @@ def _analyze_all_parallel(
     results = []
     total = len(stock_data)
     completed = 0
+    log.warning("=== SCANNER VERSION 2 ===")
     
     def analyze_one(ticker_df_pair):
         ticker, df = ticker_df_pair
