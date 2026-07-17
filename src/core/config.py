@@ -36,6 +36,27 @@ class Settings(BaseSettings):
     top_n_signals: int = 10
     scan_batch_size: int = 50      # Saham per batch untuk parallel download
 
+    # ── Universe Manager ──────────────────────────────────────────
+    # AUDIT FINDING: idx.co.id secara eksplisit MELARANG web scraping/
+    # crawling di Syarat Penggunaan mereka (poin 6), dan situs mereka
+    # memblokir request otomatis (bot detection). Karena itu, scraping
+    # IDX langsung TIDAK dipakai — lihat AUDIT_REPORT.md untuk detail
+    # riset dan alasan teknis+legal lengkapnya.
+    #
+    # Solusi: curated seed list diperluas signifikan (~700+ ticker,
+    # representasi mayoritas saham aktif BEI dari seluruh sektor),
+    # lalu SETIAP ticker divalidasi likuiditasnya via Yahoo Finance
+    # (bukan sekadar dipakai mentah). Ticker yang tidak lagi ada
+    # datanya di Yahoo otomatis dianggap delisting/suspend.
+    #
+    # EXTRA_UNIVERSE_SOURCE_URL (opsional): jika diisi, sistem akan
+    # mengambil daftar ticker TAMBAHAN dari URL ini (format: 1 ticker
+    # per baris atau CSV kolom "ticker"). Berguna jika Anda ingin
+    # menambah cakupan dari sumber pilihan Anda sendiri tanpa mengubah
+    # kode. Dibiarkan kosong = tidak dipakai (default aman).
+    extra_universe_source_url: str = ""
+    universe_min_expected: int = 100   # Alert jika universe tiba-tiba menyusut drastis
+
     # ── Technical Analysis ──────────────────────────────────────
     # EMA periods
     ema_fast: int = 20
@@ -73,11 +94,40 @@ class Settings(BaseSettings):
     weight_strength: float = 15.0    # ADX + Relative Strength
     weight_volatility: float = 10.0  # ATR position
 
-    # ── Signal Thresholds ───────────────────────────────────────
+    # ── Signal Thresholds (BULL / default baseline) ──────────────
     score_strong_buy: float = 75.0   # >= 75 → STRONG_BUY
     score_buy: float = 60.0          # >= 60 → BUY
     score_watchlist: float = 45.0    # >= 45 → WATCHLIST
     # < 45 → AVOID
+
+    # ── Adaptive Regime Thresholds ───────────────────────────────
+    # AUDIT FINDING: Skema lama mengalikan raw_score dengan regime_weight
+    # lalu membandingkan ke threshold TETAP (75/60/45). Ini membuat
+    # STRONG_BUY nyaris MUSTAHIL saat SIDEWAYS (butuh raw=100/100) dan
+    # BENAR-BENAR MUSTAHIL saat BEAR (butuh raw>100, max raw=100).
+    # Solusi: threshold minimum kini beradaptasi per regime dan
+    # dibandingkan terhadap RAW score (bukan raw*weight), sehingga
+    # sinyal berkualitas luar biasa tetap bisa lolos bahkan saat BEAR
+    # (mis. saham defensif yang reversal duluan saat market mulai pulih).
+    # final_score (raw*weight) tetap dihitung & disimpan apa adanya
+    # untuk tampilan dashboard/telegram — tidak ada perubahan makna kolom.
+    adaptive_thresholds: dict = {
+        "BULL":     {"strong_buy": 75.0, "buy": 60.0, "watchlist": 45.0},
+        "SIDEWAYS": {"strong_buy": 82.0, "buy": 68.0, "watchlist": 55.0},
+        "BEAR":     {"strong_buy": 90.0, "buy": 80.0, "watchlist": 68.0},
+    }
+
+    # ── Confidence Engine (rule-based, bukan ML) ─────────────────
+    # Confidence menggabungkan raw_score + jumlah dimensi yang selaras
+    # (trend/momentum/volume/strength semuanya kuat vs hanya sebagian).
+    confidence_very_high: float = 88.0
+    confidence_high: float = 75.0
+    confidence_medium: float = 60.0
+    # < 60 → Low
+
+    # ── Market Breadth ────────────────────────────────────────────
+    breadth_bullish_pct: float = 60.0   # % saham di atas EMA20 → breadth bullish
+    breadth_bearish_pct: float = 35.0   # % saham di atas EMA20 → breadth bearish
 
     # ── Backtest ────────────────────────────────────────────────
     backtest_lookback_years: int = 3

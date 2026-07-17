@@ -244,15 +244,77 @@ def bulk_insert_prices(records: list[dict]) -> int:
     return total_inserted
 
 
+def _upsert_with_schema_fallback(
+    table: str,
+    data: dict,
+    on_conflict: Optional[str] = None,
+    known_extra_columns: Optional[list[str]] = None,
+) -> tuple[bool, Optional[dict]]:
+    """
+    Upsert/insert dengan fallback otomatis jika ada kolom yang belum
+    ada di schema Supabase (PGRST204 "column not found in schema cache").
+
+    AUDIT NOTE (Error Handling): Insiden produksi sebelumnya menunjukkan
+    bahwa satu field tak dikenal di payload membuat SELURUH insert gagal
+    (mis. seluruh 87 sinyal gagal tersimpan karena 1 kolom `analysis_date`
+    yang tidak ada di schema). Helper ini mencegah kejadian serupa: jika
+    error menyebut kolom yang memang termasuk fitur BARU (belum tentu
+    migration sudah dijalankan user), kolom itu dibuang dan insert
+    dicoba ulang SEKALI dengan payload yang sudah dibersihkan — sinyal
+    inti tetap tersimpan meski fitur baru (mis. confidence, factor
+    contribution) untuk sementara tidak tersimpan sampai migration
+    dijalankan.
+
+    Return: (success, result_data_or_None)
+    """
+    import re as _re
+
+    db = get_db()
+    payload = dict(data)
+
+    for _ in range(2):  # max 1 retry setelah strip kolom bermasalah
+        try:
+            if on_conflict:
+                res = db.table(table).upsert(payload, on_conflict=on_conflict).execute()
+            else:
+                res = db.table(table).insert(payload).execute()
+            return True, (res.data[0] if res.data else None)
+
+        except Exception as e:
+            err_str = str(e)
+            if "PGRST204" in err_str or "could not find" in err_str.lower():
+                # Ekstrak nama kolom dari pesan error Supabase, contoh:
+                # "Could not find the 'analysis_date' column of 'signals'"
+                match = _re.search(r"'([a-zA-Z_][a-zA-Z0-9_]*)' column", err_str)
+                bad_col = match.group(1) if match else None
+
+                if bad_col and bad_col in payload:
+                    from src.core.logger import get_logger
+                    log = get_logger("database")
+                    log.warning(
+                        f"Kolom '{bad_col}' belum ada di tabel '{table}' "
+                        f"(migration terbaru belum dijalankan?). Kolom ini "
+                        f"dilewati untuk kali ini — data lain tetap disimpan."
+                    )
+                    del payload[bad_col]
+                    continue  # Coba lagi tanpa kolom bermasalah
+
+            from src.core.logger import get_logger
+            log = get_logger("database")
+            log.error(f"Gagal simpan ke '{table}': {err_str[:250]}")
+            return False, None
+
+    return False, None
+
+
 def save_signal(signal_data: dict) -> Optional[str]:
-    """Simpan sinyal ke database dengan retry. Return signal_id atau None."""
+    """Simpan sinyal ke database dengan retry + schema-drift fallback."""
     import time as _time
     for attempt in range(3):
         try:
-            db = get_db()
-            result = db.table("signals").insert(signal_data).execute()
-            if result.data:
-                return result.data[0]["id"]
+            ok, row = _upsert_with_schema_fallback("signals", signal_data)
+            if ok:
+                return row["id"] if row else None
             return None
         except Exception as e:
             err_str = str(e)
@@ -267,18 +329,11 @@ def save_signal(signal_data: dict) -> Optional[str]:
 
 
 def save_market_regime(regime_data: dict) -> bool:
-    """Simpan atau update market regime hari ini."""
-    try:
-        db = get_db()
-        db.table("market_regimes").upsert(
-            regime_data, on_conflict="regime_date"
-        ).execute()
-        return True
-    except Exception as e:
-        from src.core.logger import get_logger
-        log = get_logger("database")
-        log.error(f"Gagal save market regime: {e}", exc=e)
-        return False
+    """Simpan atau update market regime hari ini, dengan schema-drift fallback."""
+    ok, _ = _upsert_with_schema_fallback(
+        "market_regimes", regime_data, on_conflict="regime_date"
+    )
+    return ok
 
 
 def save_sector_rankings(rankings: list[dict]) -> bool:

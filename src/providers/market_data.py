@@ -44,6 +44,14 @@ class BaseMarketDataProvider(ABC):
         """
         Validasi data OHLCV.
         min_rows diturunkan ke 5 agar health check (period=5d) bisa lolos.
+
+        AUDIT FIX (Error Handling): sebelumnya fungsi ini TIDAK memeriksa
+        candle yang tidak masuk akal (high < low) maupun data tanpa
+        transaksi sama sekali (volume 0 di semua baris) — keduanya lolos
+        validasi dan bisa mencemari perhitungan indikator. Kini keduanya
+        diperiksa dengan toleransi wajar (data live kadang punya sedikit
+        baris anomali dari provider, jadi tidak di-reject hanya karena
+        1-2 baris bermasalah — hanya jika PROPORSI-nya signifikan).
         """
         if df is None or df.empty:
             return False
@@ -56,6 +64,19 @@ class BaseMarketDataProvider(ABC):
             return False
 
         if (df["close"] <= 0).all():
+            return False
+
+        # Candle tidak masuk akal (high < low) — toleransi 5%
+        inverted_ratio = (df["high"] < df["low"]).sum() / len(df)
+        if inverted_ratio > 0.05:
+            return False
+
+        # Tidak ada transaksi sama sekali — toleransi 50%
+        # (saham yang jarang ditransaksikan bisa punya beberapa hari
+        # volume 0 secara wajar, tapi mayoritas 0 menandakan data rusak
+        # atau saham suspend total)
+        zero_vol_ratio = (df["volume"] == 0).sum() / len(df)
+        if zero_vol_ratio > 0.5:
             return False
 
         return True

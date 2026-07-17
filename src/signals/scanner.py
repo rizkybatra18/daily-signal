@@ -2,15 +2,17 @@
 DAILY SIGNAL — Signal Scanner (Main Orchestrator)
 Menyatukan semua komponen menjadi daily scan pipeline.
 
-Pipeline:
-    1. Universe Manager → daftar semua saham BEI
-    2. Incremental Data Update → update database harga
-    3. Regime Detection → kondisi pasar saat ini
-    4. Sector Rotation → ranking sektor
-    5. TA Engine → analisis teknikal per saham (parallel)
-    6. Scoring → composite score 0-100 + signal type
-    7. Filter → buang yang tidak layak
-    8. Output → simpan ke database + kirim Telegram
+Pipeline (AUDIT: urutan diubah dari versi sebelumnya — lihat catatan
+di Step 3/4/5 di bawah untuk alasannya):
+    1. Universe Manager  → daftar semua saham BEI
+    2. Incremental Update → update database harga
+    3. Load OHLCV         → load data harga SEMUA saham dari DB
+    4. Regime + Breadth   → kondisi pasar, kini pakai breadth NYATA
+                             dari data yang sudah dimuat di step 3
+    5. Sector Rotation    → ranking sektor
+    6. TA Engine          → analisis teknikal + scoring per saham (parallel)
+    7. Filter & Funnel    → buang yang tidak layak, log funnel lengkap
+    8. Output             → simpan ke database + kirim Telegram
 """
 
 import concurrent.futures
@@ -23,11 +25,11 @@ import pandas as pd
 
 from src.core.config import settings
 from src.core.logger import get_logger
-from src.core.database import save_signal, log_scan_run, update_scan_run, get_db
-from src.providers.universe_manager import get_all_bei_tickers, get_tickers_by_sector
+from src.core.database import save_signal, log_scan_run, update_scan_run, get_db, ensure_stocks_registered
+from src.providers.universe_manager import get_all_bei_tickers, get_tickers_by_sector, TICKER_SECTOR
 from src.providers.market_data import MarketDataProvider, IncrementalDataUpdater, get_ohlcv_from_db
 from src.signals.ta_engine import analyze_stock, apply_basic_filters, StockAnalysis
-from src.signals.regime_engine import detect_market_regime, MarketRegime
+from src.signals.regime_engine import detect_market_regime, compute_market_breadth, MarketRegime
 from src.signals.sector_engine import calculate_sector_rankings, get_sector_bonus
 
 log = get_logger("scanner")
@@ -51,7 +53,7 @@ def run_daily_scan(
             "run_id": str,
             "regime": MarketRegime,
             "signals": list[StockAnalysis],
-            "summary": dict,
+            "summary": dict,   # termasuk "funnel" — lihat _log_funnel()
             "duration_seconds": float,
         }
     """
@@ -61,7 +63,6 @@ def run_daily_scan(
     
     log.info(f"═══ DAILY SIGNAL SCAN DIMULAI [run_id={run_id[:8]}] ═══")
     
-    # Log scan run ke database
     log_scan_run({
         "run_id": run_id,
         "run_type": "DAILY_SCAN",
@@ -71,87 +72,105 @@ def run_daily_scan(
     
     try:
         # ── Step 1: Dapatkan Universe ──────────────────────────────
-        log.info("[1/7] Mengambil universe saham BEI...")
+        log.info("[1/8] Mengambil universe saham BEI...")
         all_tickers = get_all_bei_tickers()
-        log.info(f"     → {len(all_tickers)} ticker di universe")
+        universe_count = len(all_tickers)
+        log.info(f"      → {universe_count} ticker di universe")
         
         # ── Step 2: Update Data Incremental ───────────────────────
-        log.info("[2/7] Update data harga (incremental)...")
-        # Daftarkan semua ticker ke tabel stocks sebelum insert prices
-        # Ini mencegah FK violation (23503) karena daily_prices reference stocks
-        from src.core.database import ensure_stocks_registered
+        log.info("[2/8] Update data harga (incremental)...")
         n_registered = ensure_stocks_registered(all_tickers)
         if n_registered > 0:
-            log.info(f"     → {n_registered} ticker baru didaftarkan ke tabel stocks")
+            log.info(f"      → {n_registered} ticker baru didaftarkan ke tabel stocks")
         updater = IncrementalDataUpdater()
         update_summary = updater.update_batch(all_tickers, max_workers=2)
-        log.info(f"     → {update_summary['updated']} diupdate, +{update_summary['rows_added']} rows")
-        
-        # ── Step 3: Download IHSG ──────────────────────────────────
-        log.info("[3/7] Mengambil data IHSG untuk regime detection...")
+        log.info(f"      → {update_summary['updated']} diupdate, +{update_summary['rows_added']} rows")
+
+        # ── Step 3: Load OHLCV Semua Saham dari Database ───────────
+        # AUDIT FIX (Market Breadth): sebelumnya deteksi regime (step
+        # lama #4) dijalankan SEBELUM data harga seluruh saham dimuat,
+        # sehingga breadth_data yang dikirim ke detect_market_regime()
+        # selalu None (parameter itu efektif mati, tidak pernah terisi).
+        # Urutan diubah: load dulu di sini, baru breadth bisa dihitung
+        # NYATA dari data ini sebelum deteksi regime dijalankan.
+        log.info("[3/8] Load data OHLCV seluruh saham dari database...")
+        stock_data = _load_batch_from_db(all_tickers, days=252, max_workers=3)
+        data_available_count = len(stock_data)
+        log.info(f"      → {data_available_count} saham berhasil di-load")
+
+        # ── Step 4: Market Breadth + Regime Detection ──────────────
+        log.info("[4/8] Menghitung market breadth & deteksi regime...")
         provider = MarketDataProvider()
         ihsg_df = provider.fetch_ohlcv(settings.ihsg_ticker, period="60d")
-        
-        # ── Step 4: Deteksi Market Regime ──────────────────────────
-        log.info("[4/7] Deteksi market regime...")
-        regime = detect_market_regime(ihsg_df)
-        log.info(f"     → Regime: {regime.regime} (weight={regime.regime_weight}) | {regime.regime_reason[:60]}")
+        ihsg_close = ihsg_df["close"] if ihsg_df is not None else None
+
+        breadth_data = compute_market_breadth(stock_data)
+        regime = detect_market_regime(ihsg_df, breadth_data=breadth_data)
+        log.info(
+            f"      → Regime: {regime.regime} (weight={regime.regime_weight}) | "
+            f"Breadth: {regime.breadth_score:.0f}% naik, "
+            f"{regime.pct_above_ema50:.0f}% di atas EMA50"
+        )
         
         if regime.regime == "BEAR":
-            log.warning("Market BEAR — scan tetap dijalankan tapi sinyal akan di-suppress")
+            log.warning(
+                "Market BEAR — scan tetap dijalankan, threshold sinyal diperketat "
+                f"otomatis (STRONG_BUY>={settings.adaptive_thresholds['BEAR']['strong_buy']:.0f}, "
+                "bukan disuppress total — saham reversal awal tetap bisa terdeteksi)"
+            )
         
-        # ── Step 5: Load Data dari Database untuk Analisis ─────────
-        log.info("[5/7] Load data OHLCV dari database...")
-        ihsg_close = ihsg_df["close"] if ihsg_df is not None else None
-        
-        # Parallel load OHLCV dari database
-        # Minta 252 hari agar EMA200 bisa dihitung dengan benar
-        # max_workers=3 untuk Supabase nano (hindari connection overload)
-        stock_data = _load_batch_from_db(all_tickers, days=252, max_workers=3)
-        log.info(f"     → {len(stock_data)} saham berhasil di-load")
-        
-        # ── Step 6: Sector Rotation ────────────────────────────────
-        log.info("[6/7] Menghitung sector rotation...")
+        # ── Step 5: Sector Rotation ────────────────────────────────
+        log.info("[5/8] Menghitung sector rotation...")
         sector_rankings = calculate_sector_rankings(stock_data)
         top_sectors = [f"#{sr.rank} {sr.sector}" for sr in sector_rankings[:3]]
-        log.info(f"     → Top 3 sektor: {', '.join(top_sectors)}")
+        log.info(f"      → Top 3 sektor: {', '.join(top_sectors)}")
         
-        # ── Step 7: Analisis TA per Saham (Parallel) ──────────────
-        log.info(f"[7/7] Analisis teknikal {len(stock_data)} saham (parallel)...")
+        # ── Step 6: Analisis TA per Saham (Parallel) ──────────────
+        log.info(f"[6/8] Analisis teknikal {len(stock_data)} saham (parallel)...")
         analyses = _analyze_all_parallel(
             stock_data=stock_data,
             ihsg_close=ihsg_close,
             regime_weight=regime.regime_weight,
+            regime_label=regime.regime,
             sector_rankings=sector_rankings,
-            max_workers=4,   # CPU-bound, tidak butuh banyak I/O worker
+            max_workers=4,
         )
+        analyzed_count = len(analyses)
         
-        # ── Filter dan Sort ────────────────────────────────────────
-        # Buang yang tidak lolos filter
+        # ── Step 7: Filter, Sort, Funnel ────────────────────────────
+        log.info("[7/8] Filter & ranking...")
         passed = [a for a in analyses if a.passed_basic_filter]
-        
-        # Sort by final score DESC
+        technical_pass_count = len(passed)
+
         passed.sort(key=lambda a: a.score.final_score, reverse=True)
         
-        # Ambil sinyal yang actionable
         strong_buy = [a for a in passed if a.score.signal_type == "STRONG_BUY"]
         buy = [a for a in passed if a.score.signal_type == "BUY"]
         watchlist = [a for a in passed if a.score.signal_type == "WATCHLIST"]
-        
-        # Top signals untuk Telegram (prioritas STRONG_BUY dulu)
+        avoid = [a for a in passed if a.score.signal_type == "AVOID"]
+        score_pass_count = len(strong_buy) + len(buy) + len(watchlist)
+
         top_signals = (strong_buy + buy)[:top_n]
+
+        funnel = {
+            "universe": universe_count,
+            "data_available": data_available_count,
+            "analyzed": analyzed_count,
+            "technical_pass": technical_pass_count,
+            "score_pass_watchlist_plus": score_pass_count,
+            "buy": len(buy),
+            "strong_buy": len(strong_buy),
+        }
+        _log_funnel(funnel, regime.regime)
         
         # ── Simpan ke Database ─────────────────────────────────────
         signal_ids = []
         if save_to_db:
             log.info(f"Menyimpan {len(passed)} sinyal ke database...")
             for analysis in passed:
-                # Ambil sektor dari universe_manager
-                from src.providers.universe_manager import TICKER_SECTOR
                 ticker_clean = analysis.ticker.replace(".JK", "")
                 sector = TICKER_SECTOR.get(ticker_clean, "Uncategorized")
 
-                # Cari sector rank dari sector_rankings
                 sec_rank = next(
                     (sr.rank for sr in sector_rankings if sr.sector == sector),
                     None,
@@ -170,7 +189,6 @@ def run_daily_scan(
             log.info(f"✓ {len(signal_ids)} sinyal tersimpan")
         
         # ── Kirim ke Telegram ─────────────────────────────────────
-        # Selalu kirim — termasuk saat top_signals kosong
         if send_telegram:
             _send_signals_telegram(top_signals, regime, sector_rankings)
         
@@ -183,10 +201,11 @@ def run_daily_scan(
             "strong_buy": len(strong_buy),
             "buy": len(buy),
             "watchlist": len(watchlist),
-            "avoid": len([a for a in passed if a.score.signal_type == "AVOID"]),
+            "avoid": len(avoid),
             "signals_saved": len(signal_ids),
             "regime": regime.regime,
             "duration_seconds": round(duration, 1),
+            "funnel": funnel,
         }
         
         update_scan_run(run_id, {
@@ -227,6 +246,37 @@ def run_daily_scan(
         raise
 
 
+def _log_funnel(funnel: dict, regime_label: str):
+    """
+    Log funnel scan secara terstruktur (AUDIT: Filter Audit / Logging).
+
+    CATATAN JUJUR: "Regime" dan "Sector" di sistem ini BUKAN gate yang
+    men-drop kandidat satu-per-satu — keduanya adalah MODIFIER yang
+    diterapkan SAMA ke semua saham (regime = satu nilai untuk seluruh
+    pasar hari itu; sector_bonus = +5/-5/0 tergantung ranking sektor
+    saham tsb). Karena itu funnel di bawah menampilkan tahapan yang
+    SUNGGUHAN mengurangi kandidat (data availability → technical
+    filter → score threshold), bukan tahapan fiktif yang sebenarnya
+    tidak meng-gugurkan saham satupun.
+    """
+    lines = [
+        "=" * 44,
+        "  DAILY SCAN — FUNNEL",
+        "=" * 44,
+        f"  Universe             : {funnel['universe']}",
+        f"  Data Tersedia         : {funnel['data_available']}",
+        f"  Berhasil Dianalisis   : {funnel['analyzed']}",
+        f"  Lolos Filter Teknikal : {funnel['technical_pass']}",
+        f"  Lolos Score (>=WL)    : {funnel['score_pass_watchlist_plus']}",
+        f"  BUY                   : {funnel['buy']}",
+        f"  STRONG BUY            : {funnel['strong_buy']}",
+        "-" * 44,
+        f"  Market Regime aktif   : {regime_label}",
+        "=" * 44,
+    ]
+    log.info("\n" + "\n".join(lines), details=funnel)
+
+
 def _load_batch_from_db(
     tickers: list[str],
     days: int = 252,
@@ -239,7 +289,6 @@ def _load_batch_from_db(
     """
     import time as _time
     from datetime import date as _date, timedelta
-    from src.core.database import get_db
 
     if not tickers:
         return {}
@@ -277,7 +326,6 @@ def _load_batch_from_db(
         log.warning("Tidak ada data OHLCV berhasil di-load dari database")
         return {}
 
-    # Pisah per ticker di Python — tidak perlu koneksi lagi
     df_all = pd.DataFrame(all_rows)
     df_all["trade_date"] = pd.to_datetime(df_all["trade_date"])
 
@@ -300,10 +348,22 @@ def _analyze_all_parallel(
     stock_data: dict[str, pd.DataFrame],
     ihsg_close: Optional[pd.Series],
     regime_weight: float,
+    regime_label: str,
     sector_rankings: list,
     max_workers: int = 4,
 ) -> list[StockAnalysis]:
-    """Analisis semua saham secara parallel."""
+    """
+    Analisis semua saham secara parallel.
+
+    AUDIT FIX (Scoring Engine): sebelumnya sector_bonus diterapkan
+    SETELAH analyze_stock() selesai (bolt-on ke final_score, lalu
+    _determine_signal_type dipanggil ULANG dengan regime_weight
+    di-hardcode 1.0 — mengabaikan regime asli untuk klasifikasi kedua
+    ini). Sekarang sector_bonus dihitung LEBIH DULU dan dikirim
+    langsung ke analyze_stock(), yang menerapkannya ke raw_score
+    sebelum klasifikasi — satu kali proses, konsisten, tidak ada
+    override regime yang terselip.
+    """
     results = []
     total = len(stock_data)
     completed = 0
@@ -311,34 +371,20 @@ def _analyze_all_parallel(
     def analyze_one(ticker_df_pair):
         ticker, df = ticker_df_pair
         try:
+            sector_bonus = get_sector_bonus(ticker, sector_rankings)
+
             analysis = analyze_stock(
                 ticker=ticker,
                 df=df,
                 ihsg_close=ihsg_close,
                 regime_weight=regime_weight,
+                regime=regime_label,
+                sector_bonus=sector_bonus,
             )
             if analysis is None:
                 return None
             
-            # Apply basic filters
             analysis = apply_basic_filters(analysis)
-            
-            # Apply sector bonus
-            bonus = get_sector_bonus(ticker, sector_rankings)
-            if bonus != 0 and analysis.passed_basic_filter:
-                # Adjust final score dengan sector bonus
-                analysis.score.final_score = max(
-                    0,
-                    min(100, analysis.score.final_score + bonus)
-                )
-                # Re-determine signal type
-                from src.signals.ta_engine import _determine_signal_type
-                analysis.score.signal_type = _determine_signal_type(
-                    analysis.score.final_score,
-                    1.0,  # Already adjusted
-                    analysis,
-                )
-            
             return analysis
         except Exception as e:
             log.debug(f"Analisis gagal {ticker}: {e}")
@@ -391,17 +437,14 @@ def run_health_check() -> dict:
     
     results = {}
     
-    # Database
     results["database"] = db_health()
     
-    # Telegram
     try:
         from src.telegram.bot import check_telegram_health
         results["telegram"] = check_telegram_health()
     except Exception as e:
         results["telegram"] = {"status": "error", "error": str(e)}
     
-    # Data Provider
     try:
         provider = MarketDataProvider()
         df = provider.fetch_ohlcv("BBCA.JK", period="5d")

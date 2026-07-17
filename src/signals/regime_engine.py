@@ -23,6 +23,7 @@ from datetime import date
 from typing import Optional
 
 from src.signals.ta_engine import calc_rsi, calc_ema, calc_adx, calc_atr
+from src.core.config import settings
 from src.core.logger import get_logger
 from src.core.database import save_market_regime, get_db
 
@@ -44,7 +45,13 @@ class MarketRegime:
     advance_count: int = 0
     decline_count: int = 0
     ad_ratio: float = 1.0          # Advance/Decline ratio
-    breadth_score: float = 50.0    # 0-100
+    breadth_score: float = 50.0    # 0-100, % saham naik hari ini
+    # ── Market Breadth tambahan (AUDIT: Market Breadth Audit) ────
+    # Dihitung dari stock_data yang SUDAH dimuat scanner (gratis,
+    # tidak perlu API/data tambahan) — lihat compute_market_breadth().
+    pct_above_ema20: float = 50.0
+    pct_above_ema50: float = 50.0
+    pct_above_ema200: float = 50.0
     regime_reason: str = ""
     
     # Signal modifier berdasarkan regime
@@ -52,6 +59,81 @@ class MarketRegime:
     # SIDEWAYS: semua sinyal dikurangi 25%
     # BEAR: semua sinyal BUY di-suppress, SL lebih ketat
     signal_modifier: str = "NORMAL"
+
+
+def compute_market_breadth(stock_data: dict[str, "pd.DataFrame"]) -> dict:
+    """
+    Hitung Market Breadth NYATA dari data harga yang sudah dimuat scanner.
+    Tidak butuh API/data tambahan — memanfaatkan stock_data yang sama
+    yang dipakai untuk analisis TA per saham.
+
+    AUDIT NOTE: Sebelumnya `breadth_data` parameter di detect_market_regime
+    TIDAK PERNAH diisi oleh scanner (selalu None) karena urutan pipeline
+    lama menjalankan deteksi regime SEBELUM data harga seluruh saham
+    dimuat. Ini diperbaiki dengan mengubah urutan di scanner.py agar
+    stock_data tersedia lebih dulu, lalu breadth dihitung dari situ.
+
+    Metrik yang dihitung:
+      - advance / decline: jumlah saham naik vs turun hari ini
+      - pct_above_ema20/50/200: % saham yang berada di atas EMA masing2
+        (indikator partisipasi pasar yang lebih dalam dari sekadar IHSG)
+
+    Return dict siap dipakai sebagai `breadth_data` di detect_market_regime.
+    """
+    if not stock_data:
+        return {}
+
+    advance = 0
+    decline = 0
+    above_ema20 = 0
+    above_ema50 = 0
+    above_ema200 = 0
+    valid_ema20 = 0
+    valid_ema50 = 0
+    valid_ema200 = 0
+
+    for ticker, df in stock_data.items():
+        if df is None or df.empty or len(df) < 2:
+            continue
+
+        close = df["close"]
+        last = float(close.iloc[-1])
+        prev = float(close.iloc[-2])
+
+        if last > prev:
+            advance += 1
+        elif last < prev:
+            decline += 1
+
+        # EMA20 partisipasi (butuh minimal 20 baris)
+        if len(df) >= 20:
+            ema20 = close.ewm(span=20, adjust=False, min_periods=20).mean().iloc[-1]
+            if pd.notna(ema20):
+                valid_ema20 += 1
+                if last > float(ema20):
+                    above_ema20 += 1
+
+        if len(df) >= 50:
+            ema50 = close.ewm(span=50, adjust=False, min_periods=50).mean().iloc[-1]
+            if pd.notna(ema50):
+                valid_ema50 += 1
+                if last > float(ema50):
+                    above_ema50 += 1
+
+        if len(df) >= 200:
+            ema200 = close.ewm(span=200, adjust=False, min_periods=200).mean().iloc[-1]
+            if pd.notna(ema200):
+                valid_ema200 += 1
+                if last > float(ema200):
+                    above_ema200 += 1
+
+    return {
+        "advance": advance,
+        "decline": decline,
+        "pct_above_ema20": round(above_ema20 / valid_ema20 * 100, 1) if valid_ema20 > 0 else 50.0,
+        "pct_above_ema50": round(above_ema50 / valid_ema50 * 100, 1) if valid_ema50 > 0 else 50.0,
+        "pct_above_ema200": round(above_ema200 / valid_ema200 * 100, 1) if valid_ema200 > 0 else 50.0,
+    }
 
 
 def detect_market_regime(
@@ -157,12 +239,15 @@ def detect_market_regime(
             bear_signals += 2
             reasons.append(f"Trend turun kuat ADX={last_adx:.1f}")
         
-        # 6. Breadth (advance-decline)
+        # 6. Breadth (advance-decline + partisipasi EMA)
         advance_count = 0
         decline_count = 0
         ad_ratio = 1.0
         breadth_score = 50.0
-        
+        pct_above_ema20 = 50.0
+        pct_above_ema50 = 50.0
+        pct_above_ema200 = 50.0
+
         if breadth_data:
             advance_count = breadth_data.get("advance", 0)
             decline_count = breadth_data.get("decline", 0)
@@ -170,13 +255,29 @@ def detect_market_regime(
             if total > 0:
                 ad_ratio = advance_count / (decline_count + 1)  # Avoid div by 0
                 breadth_score = (advance_count / total) * 100
-                
-                if breadth_score > 60:
+
+                if breadth_score > settings.breadth_bullish_pct:
                     bull_signals += 2
                     reasons.append(f"Breadth bullish ({breadth_score:.0f}% saham naik)")
-                elif breadth_score < 35:
+                elif breadth_score < settings.breadth_bearish_pct:
                     bear_signals += 2
                     reasons.append(f"Breadth bearish ({breadth_score:.0f}% saham naik)")
+
+            # Partisipasi EMA20 — lebih dalam dari sekadar breadth harian,
+            # menangkap apakah kenaikan pasar didukung banyak saham atau
+            # hanya segelintir saham kapitalisasi besar (indeks bisa naik
+            # meski partisipasi sempit — ini menangkap kondisi itu).
+            if "pct_above_ema20" in breadth_data:
+                pct_above_ema20 = breadth_data["pct_above_ema20"]
+                pct_above_ema50 = breadth_data.get("pct_above_ema50", 50.0)
+                pct_above_ema200 = breadth_data.get("pct_above_ema200", 50.0)
+
+                if pct_above_ema50 > 55:
+                    bull_signals += 1
+                    reasons.append(f"{pct_above_ema50:.0f}% saham di atas EMA50")
+                elif pct_above_ema50 < 40:
+                    bear_signals += 1
+                    reasons.append(f"Hanya {pct_above_ema50:.0f}% saham di atas EMA50")
         
         # ── Determine Regime ─────────────────────────────────
         
@@ -225,6 +326,9 @@ def detect_market_regime(
             decline_count=decline_count,
             ad_ratio=round(ad_ratio, 2),
             breadth_score=round(breadth_score, 1),
+            pct_above_ema20=round(pct_above_ema20, 1),
+            pct_above_ema50=round(pct_above_ema50, 1),
+            pct_above_ema200=round(pct_above_ema200, 1),
             regime_reason=regime_reason,
             signal_modifier=signal_modifier,
         )
@@ -234,7 +338,8 @@ def detect_market_regime(
         
         log.info(
             f"Market Regime: {regime} (weight={regime_weight}) | "
-            f"IHSG={last_close:,.0f} | RSI={last_rsi:.1f} | 5D={change_5d:+.1f}%"
+            f"IHSG={last_close:,.0f} | RSI={last_rsi:.1f} | 5D={change_5d:+.1f}% | "
+            f"Breadth: {breadth_score:.0f}% naik, {pct_above_ema50:.0f}% di atas EMA50"
         )
         
         return result
@@ -249,7 +354,12 @@ def detect_market_regime(
 
 
 def _save_regime_to_db(regime: MarketRegime):
-    """Simpan regime ke database (best-effort)."""
+    """
+    Simpan regime ke database (best-effort).
+    Kolom pct_above_ema20/50/200 baru ada setelah migration 002 —
+    save_market_regime() otomatis toleran jika migration belum jalan
+    (lihat _upsert_with_schema_fallback di database.py).
+    """
     try:
         save_market_regime({
             "regime_date": date.today().isoformat(),
@@ -267,6 +377,9 @@ def _save_regime_to_db(regime: MarketRegime):
             "bull_weight": 1.0,
             "sideways_weight": 0.75,
             "bear_weight": 0.4,
+            "pct_above_ema20": regime.pct_above_ema20,
+            "pct_above_ema50": regime.pct_above_ema50,
+            "pct_above_ema200": regime.pct_above_ema200,
         })
     except Exception:
         pass  # Non-critical
@@ -294,6 +407,12 @@ def get_latest_regime() -> Optional[MarketRegime]:
             ihsg_rsi=row.get("ihsg_rsi", 50),
             change_5d=row.get("change_5d_pct", 0),
             regime_reason=row.get("regime_reason", ""),
+            advance_count=row.get("advance_count", 0) or 0,
+            decline_count=row.get("decline_count", 0) or 0,
+            ad_ratio=row.get("advance_decline_ratio", 1.0) or 1.0,
+            pct_above_ema20=row.get("pct_above_ema20", 50.0) or 50.0,
+            pct_above_ema50=row.get("pct_above_ema50", 50.0) or 50.0,
+            pct_above_ema200=row.get("pct_above_ema200", 50.0) or 50.0,
         )
     except Exception:
         return None

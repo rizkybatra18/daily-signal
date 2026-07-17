@@ -179,11 +179,19 @@ def cmd_run_backtests(args):
     tickers = get_all_bei_tickers()[:limit]
     passed = 0
 
+    # AUDIT FIX: sertakan data IHSG agar backtest bisa menghitung
+    # Relative Strength sungguhan (dimensi "strength" di composite
+    # score), bukan selalu netral/0 seperti sebelumnya.
+    ihsg_df = get_ohlcv_from_db(settings.ihsg_ticker, days=365 * 3)
+    ihsg_close = ihsg_df["close"] if ihsg_df is not None and not ihsg_df.empty else None
+    if ihsg_close is None:
+        log.warning("Data IHSG tidak tersedia di DB — backtest jalan tanpa dimensi Relative Strength")
+
     def bt_one(ticker):
         df = get_ohlcv_from_db(ticker, days=365*3)
         if df is None or len(df) < 100:
             return None
-        r = run_backtest(ticker, df)
+        r = run_backtest(ticker, df, ihsg_close=ihsg_close)
         save_backtest_result(r)
         return r
 

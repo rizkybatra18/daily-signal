@@ -33,8 +33,22 @@ BEI_SECTORS = [
 ]
 
 # Sektor ETF/proxy tickers untuk hitung sektor return
-# Menggunakan basket dari beberapa saham per sektor
-SECTOR_PROXY = {
+#
+# AUDIT FIX (Scoring Engine Audit / Universe Manager Audit):
+# Sebelumnya proxy per sektor HARDCODED hanya 3-4 saham big-cap
+# (mis. Financials cuma BBCA/BBRI/BMRI/BBNI). Setelah Universe Manager
+# diperluas ke ~550 ticker (lihat universe_manager.py), performa sektor
+# yang dihitung dari 4 saham raksasa saja jadi TIDAK representatif dan
+# menyisakan sebagian besar universe baru tidak termanfaatkan untuk
+# perhitungan sector rotation — padahal sector_bonus ini yang langsung
+# mempengaruhi raw_score tiap saham (lihat ta_engine.py).
+#
+# Fix: proxy kini diturunkan DINAMIS dari TICKER_SECTOR (peta sektor
+# yang sama dipakai scanner untuk seluruh universe), bukan daftar
+# terpisah yang gampang basi. _FALLBACK_SECTOR_PROXY tetap disimpan
+# sebagai jaring pengaman jika import universe_manager gagal karena
+# alasan apapun (defense in depth, bukan jalur normal).
+_FALLBACK_SECTOR_PROXY = {
     "Financials": ["BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK"],
     "Consumer Non-Cyclicals": ["UNVR.JK", "ICBP.JK", "INDF.JK", "MYOR.JK"],
     "Consumer Cyclicals": ["ASII.JK", "MAPI.JK", "ACES.JK", "GOTO.JK"],
@@ -47,6 +61,23 @@ SECTOR_PROXY = {
     "Properties & Real Estate": ["BSDE.JK", "CTRA.JK", "PWON.JK"],
     "Transportation & Logistics": ["BIRD.JK", "GIAA.JK", "SMDR.JK"],
 }
+
+
+def _build_sector_proxy() -> dict[str, list[str]]:
+    """Turunkan proxy sektor dari seluruh universe (TICKER_SECTOR)."""
+    try:
+        from src.providers.universe_manager import TICKER_SECTOR
+        if not TICKER_SECTOR:
+            return _FALLBACK_SECTOR_PROXY
+        proxy: dict[str, list[str]] = {}
+        for ticker_clean, sector in TICKER_SECTOR.items():
+            proxy.setdefault(sector, []).append(f"{ticker_clean}.JK")
+        return proxy or _FALLBACK_SECTOR_PROXY
+    except Exception:
+        return _FALLBACK_SECTOR_PROXY
+
+
+SECTOR_PROXY = _build_sector_proxy()
 
 
 @dataclass

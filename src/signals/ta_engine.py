@@ -115,9 +115,11 @@ class CompositeScore:
     volume_score: float = 0.0
     strength_score: float = 0.0
     volatility_score: float = 0.0
-    raw_score: float = 0.0          # Sum sebelum regime adjustment
-    regime_weight: float = 1.0       # Multiplier dari market regime
-    final_score: float = 0.0         # raw_score × regime_weight
+    raw_score: float = 0.0          # Sum sebelum regime adjustment (+ sector bonus)
+    sector_bonus: float = 0.0        # +5/-5/0 dari sector rotation, sudah masuk raw_score
+    regime_weight: float = 1.0       # Multiplier dari market regime (untuk display)
+    final_score: float = 0.0         # raw_score × regime_weight (TIDAK dipakai klasifikasi lagi)
+    confidence: str = "Low"          # Very High / High / Medium / Low — lihat compute_confidence()
     signal_type: str = "AVOID"        # STRONG_BUY/BUY/WATCHLIST/AVOID
 
 
@@ -138,7 +140,8 @@ class StockAnalysis:
     volatility: VolatilityIndicators = field(default_factory=VolatilityIndicators)
     risk: RiskLevels = field(default_factory=RiskLevels)
     score: CompositeScore = field(default_factory=CompositeScore)
-    
+    factor_contribution: dict = field(default_factory=dict)   # lihat build_factor_contribution()
+
     # Flags
     passed_basic_filter: bool = True
     filter_fail_reason: Optional[str] = None
@@ -147,7 +150,9 @@ class StockAnalysis:
         """
         Convert ke flat dict untuk database insert.
         Kolom harus PERSIS match dengan schema tabel signals di Supabase.
-        Tidak boleh ada kolom ekstra yang tidak ada di schema!
+        Kolom BARU (confidence, raw_score, sector_bonus, factor_contribution)
+        butuh migration 002 — jika belum dijalankan, save_signal() otomatis
+        toleran dan melewati kolom yang belum ada (lihat database.py).
         """
         return {
             # === WAJIB (NOT NULL) ===
@@ -196,6 +201,13 @@ class StockAnalysis:
             "volume_score":     self.score.volume_score,
             "strength_score":   self.score.strength_score,
             "volatility_score": self.score.volatility_score,
+
+            # === BARU: Adaptive Threshold / Confidence / Factor Contribution ===
+            # (butuh migration 002 — lihat migrations/002_audit_improvements.sql)
+            "raw_score":     self.score.raw_score,
+            "sector_bonus":  self.score.sector_bonus,
+            "confidence":    self.score.confidence,
+            "factor_contribution": self.factor_contribution,
 
             # market_regime, sector, sector_rank diisi oleh scanner.py
         }
@@ -603,38 +615,138 @@ def _calc_risk_levels(close: float, atr: float, direction: str = "BUY") -> RiskL
     )
 
 
-def _determine_signal_type(score: float, regime_weight: float, analysis: 'StockAnalysis') -> str:
+def _determine_signal_type(raw_score: float, regime: str, analysis: 'StockAnalysis') -> str:
     """
-    Tentukan tipe sinyal berdasarkan composite score dan market regime.
-    
-    Rules:
-        >= 75 dan regime normal: STRONG_BUY
-        >= 60: BUY
-        >= 45: WATCHLIST
-        < 45:  AVOID
-    
-    Override BEARISH regime:
-        Semua sinyal turun 1 level
+    Tentukan tipe sinyal berdasarkan RAW composite score (0-100, SEBELUM
+    dikalikan regime_weight) dan threshold adaptif per regime market.
+
+    ═══════════════════════════════════════════════════════════════════
+    AUDIT FINDING & FIX (Adaptive Threshold, lihat AUDIT_REPORT.md):
+    ═══════════════════════════════════════════════════════════════════
+    Implementasi SEBELUMNYA membandingkan (raw_score × regime_weight)
+    terhadap threshold TETAP (75/60/45). Karena regime_weight untuk
+    BEAR=0.4, secara matematis TIDAK ADA raw_score (maks 100) yang bisa
+    menghasilkan adjusted_score >= 45 (0.4×100=40 < 45) — artinya BEAR
+    membuat SEMUA saham otomatis AVOID, tanpa kecuali, walau skornya
+    sempurna. Untuk SIDEWAYS (weight=0.75), STRONG_BUY nyaris mustahil
+    (butuh raw>=100, yaitu skor sempurna literal).
+
+    Ini memang "melindungi modal" saat BEAR, TAPI juga membuat sistem
+    100% tidak adaptif — begitu market mulai membaik dari BEAR ke
+    SIDEWAYS, sistem tetap nyaris tidak pernah mengeluarkan STRONG_BUY
+    walau ada saham dengan skor luar biasa (RS tinggi, breakout volume,
+    trend sudah berbalik). Ini bertentangan dengan tujuan eksplisit:
+    "memastikan sistem mampu menghasilkan sinyal berkualitas ketika
+    market mulai bullish."
+
+    Fix: threshold kini beradaptasi per regime dan dibandingkan
+    terhadap RAW score (bukan raw×weight):
+        BULL     : STRONG_BUY>=75  BUY>=60  WATCHLIST>=45  (baseline, TIDAK berubah)
+        SIDEWAYS : STRONG_BUY>=82  BUY>=68  WATCHLIST>=55  (lebih ketat, tapi TERCAPAI)
+        BEAR     : STRONG_BUY>=90  BUY>=80  WATCHLIST>=68  (sangat ketat, tapi TIDAK MUSTAHIL —
+                   saham yang reversal duluan saat market mulai pulih tetap bisa terdeteksi)
+
+    final_score (raw×weight) TETAP dihitung & ditampilkan apa adanya
+    di dashboard/telegram (tidak ada perubahan makna kolom itu) — hanya
+    KEPUTUSAN KLASIFIKASI yang kini pakai raw_score + threshold adaptif.
     """
-    adjusted_score = score * regime_weight
-    
-    # Minimum filter tambahan
+    thresholds = settings.adaptive_thresholds.get(regime, settings.adaptive_thresholds["BULL"])
+
+    score = raw_score
+
+    # Minimum filter tambahan (tidak berubah dari sebelumnya)
     rsi = analysis.momentum.rsi
     volume_ratio = analysis.volume.volume_ratio
-    
+
     # Tidak boleh STRONG_BUY jika RSI overbought atau volume sangat rendah
     if rsi > 75 or volume_ratio < 0.5:
-        if adjusted_score >= settings.score_strong_buy:
-            adjusted_score = settings.score_buy  # Turunkan satu level
-    
-    if adjusted_score >= settings.score_strong_buy:
+        if score >= thresholds["strong_buy"]:
+            score = thresholds["buy"]  # Turunkan satu level
+
+    if score >= thresholds["strong_buy"]:
         return "STRONG_BUY"
-    elif adjusted_score >= settings.score_buy:
+    elif score >= thresholds["buy"]:
         return "BUY"
-    elif adjusted_score >= settings.score_watchlist:
+    elif score >= thresholds["watchlist"]:
         return "WATCHLIST"
     else:
         return "AVOID"
+
+
+def compute_confidence(raw_score: float, analysis: 'StockAnalysis') -> str:
+    """
+    Confidence Engine — RULE-BASED (bukan Machine Learning).
+
+    Confidence bukan sekadar pembulatan dari raw_score, tapi kombinasi:
+      1. Level raw_score itu sendiri
+      2. Berapa BANYAK dimensi (trend/momentum/volume/strength) yang
+         benar-benar KUAT secara independen (bukan cuma total tinggi
+         karena satu dimensi dominan menutupi dimensi lain yang lemah)
+
+    Ini menjawab bagian "Confidence Engine" di audit: skor 90 yang
+    didukung SEMUA dimensi kuat harus lebih dipercaya dibanding skor
+    90 yang didapat dari satu dimensi ekstrem + sisanya pas-pasan.
+
+    Return: "Very High" | "High" | "Medium" | "Low"
+    """
+    # Hitung berapa dimensi yang "kuat" (>= 70% dari skor maksimalnya)
+    dims = [
+        (analysis.score.trend_score, 30.0),
+        (analysis.score.momentum_score, 25.0),
+        (analysis.score.volume_score, 20.0),
+        (analysis.score.strength_score, 15.0),
+    ]
+    strong_dims = sum(1 for val, mx in dims if mx > 0 and (val / mx) >= 0.70)
+
+    if raw_score >= settings.confidence_very_high and strong_dims >= 3:
+        return "Very High"
+    elif raw_score >= settings.confidence_high and strong_dims >= 2:
+        return "High"
+    elif raw_score >= settings.confidence_medium:
+        return "Medium"
+    else:
+        return "Low"
+
+
+def build_factor_contribution(analysis: 'StockAnalysis', sector_bonus: float = 0.0) -> dict:
+    """
+    Susun breakdown kontribusi setiap faktor ke composite score, siap
+    dipakai Dashboard/Telegram untuk menjelaskan "Kenapa saham ini
+    mendapat skor tinggi?" tanpa mengubah tampilan saat ini — data
+    ini disimpan sebagai JSONB, konsumsinya menyusul di iterasi UI
+    berikutnya.
+
+    Return contoh:
+        {"trend": 26, "momentum": 20, "volume": 15, "strength": 12,
+         "volatility": 8, "sector_bonus": 5, "total_raw": 81,
+         "highlights": ["EMA Alignment", "Volume Spike", "RS vs IHSG positif"]}
+    """
+    s = analysis.score
+    highlights = []
+
+    if s.trend_score >= 24:
+        highlights.append("EMA Alignment kuat")
+    if analysis.volume.volume_spike:
+        highlights.append(f"Volume Spike {analysis.volume.volume_ratio:.1f}x")
+    if analysis.strength.rel_strength > 5:
+        highlights.append("Outperform IHSG (RS positif)")
+    if analysis.momentum.macd_cross == "GOLDEN":
+        highlights.append("MACD Golden Cross")
+    if analysis.strength.adx >= 25:
+        highlights.append(f"Trend kuat (ADX {analysis.strength.adx:.0f})")
+    if sector_bonus > 0:
+        highlights.append("Sektor sedang memimpin")
+
+    return {
+        "trend": round(s.trend_score, 1),
+        "momentum": round(s.momentum_score, 1),
+        "volume": round(s.volume_score, 1),
+        "strength": round(s.strength_score, 1),
+        "volatility": round(s.volatility_score, 1),
+        "sector_bonus": round(sector_bonus, 1),
+        "total_raw": round(s.raw_score, 1),
+        "highlights": highlights,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -646,6 +758,8 @@ def analyze_stock(
     df: pd.DataFrame,
     ihsg_close: Optional[pd.Series] = None,
     regime_weight: float = 1.0,
+    regime: str = "BULL",
+    sector_bonus: float = 0.0,
 ) -> Optional[StockAnalysis]:
     """
     Analisis lengkap satu saham.
@@ -654,7 +768,15 @@ def analyze_stock(
         ticker: Kode saham
         df: DataFrame OHLCV harian (minimal 60 baris)
         ihsg_close: Close price IHSG untuk Relative Strength
-        regime_weight: Multiplier dari market regime (0.3-1.0)
+        regime_weight: Multiplier dari market regime, dipakai untuk
+            `final_score` (nilai TAMPILAN di dashboard/telegram, 0-100).
+        regime: Label regime ("BULL"/"SIDEWAYS"/"BEAR"), dipakai untuk
+            memilih threshold klasifikasi sinyal yang adaptif — lihat
+            _determine_signal_type(). Default "BULL" agar backward
+            compatible dengan caller lama yang hanya mengisi regime_weight.
+        sector_bonus: +5/-5/0 dari sector rotation (top3/bottom3),
+            diterapkan ke RAW score SEBELUM dikalikan regime_weight
+            (audit fix — lihat catatan di _determine_signal_type).
     
     Returns:
         StockAnalysis atau None jika data tidak memadai
@@ -875,10 +997,20 @@ def analyze_stock(
         strength_score = _score_strength(analysis)
         volatility_score = _score_volatility(analysis, last_close)
         
-        raw_score = trend_score + momentum_score + volume_score + strength_score + volatility_score
+        raw_score_base = trend_score + momentum_score + volume_score + strength_score + volatility_score
+
+        # AUDIT FIX: sector_bonus diterapkan ke RAW score (bukan final_score
+        # yang sudah dikalikan regime_weight). Sebelumnya bonus diterapkan
+        # setelah pengalian regime_weight, membuat pengaruh bonus tidak
+        # konsisten antar regime (proporsinya membesar tak wajar saat BEAR
+        # karena base score sudah kecil). Diterapkan ke raw agar konsisten.
+        raw_score = max(0.0, min(100.0, raw_score_base + sector_bonus))
+
+        # final_score TETAP raw×weight — nilai TAMPILAN, tidak dipakai
+        # untuk klasifikasi sinyal lagi (lihat _determine_signal_type).
         final_score = raw_score * regime_weight
         
-        signal_type = _determine_signal_type(final_score, regime_weight, analysis)
+        signal_type = _determine_signal_type(raw_score, regime, analysis)
         
         analysis.score = CompositeScore(
             trend_score=round(trend_score, 1),
@@ -887,10 +1019,13 @@ def analyze_stock(
             strength_score=round(strength_score, 1),
             volatility_score=round(volatility_score, 1),
             raw_score=round(raw_score, 1),
+            sector_bonus=round(sector_bonus, 1),
             regime_weight=regime_weight,
             final_score=round(final_score, 1),
             signal_type=signal_type,
         )
+        analysis.score.confidence = compute_confidence(raw_score, analysis)
+        analysis.factor_contribution = build_factor_contribution(analysis, sector_bonus)
         
         # ── Risk Levels ─────────────────────────────────────────
         if signal_type in ("STRONG_BUY", "BUY"):
