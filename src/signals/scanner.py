@@ -383,6 +383,7 @@ def _analyze_all_parallel(
                 sector_bonus=sector_bonus,
             )
             if analysis is None:
+                log.warning(f"{ticker} -> analyze_stock() returned None")
                 return None
             
             analysis = apply_basic_filters(analysis)
