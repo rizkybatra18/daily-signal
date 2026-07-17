@@ -367,7 +367,6 @@ def _analyze_all_parallel(
     results = []
     total = len(stock_data)
     completed = 0
-    log.warning("=== SCANNER VERSION 2 ===")
     
     def analyze_one(ticker_df_pair):
         ticker, df = ticker_df_pair
@@ -383,13 +382,12 @@ def _analyze_all_parallel(
                 sector_bonus=sector_bonus,
             )
             if analysis is None:
-                log.warning(f"{ticker} -> analyze_stock() returned None")
                 return None
             
             analysis = apply_basic_filters(analysis)
             return analysis
         except Exception as e:
-            log.exception(f"Analisis gagal {ticker}")
+            log.debug(f"Analisis gagal {ticker}: {e}")
             return None
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -407,7 +405,7 @@ def _analyze_all_parallel(
                 if result is not None:
                     results.append(result)
             except Exception as e:
-                log.exception(f"Analisis error {ticker}")
+                log.debug(f"Analisis error {ticker}: {e}")
             
             if completed % 50 == 0:
                 log.info(f"  Progress: {completed}/{total} saham dianalisis...")

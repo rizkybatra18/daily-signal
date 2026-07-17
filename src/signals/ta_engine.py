@@ -782,15 +782,6 @@ def analyze_stock(
         StockAnalysis atau None jika data tidak memadai
     """
     if df is None or df.empty or len(df) < 30:
-        log.warning(f"{ticker}: df is None")
-        return None
-        
-    if df.empty:
-        log.warning(f"{ticker}: df is empty")
-        return None
-
-    if len(df) < 30:
-        log.warning(f"{ticker}: len(df)={len(df)}")
         return None
     
     try:
