@@ -8,7 +8,7 @@ import time
 from typing import Optional
 from supabase import create_client, Client
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from src.core.database import get_last_price_date, bulk_insert_prices, get_price_row_count
+
 
 
 _db_client: Optional[Client] = None
