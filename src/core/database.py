@@ -8,6 +8,7 @@ import time
 from typing import Optional
 from supabase import create_client, Client
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from src.core.database import get_last_price_date, bulk_insert_prices, get_price_row_count
 
 
 _db_client: Optional[Client] = None
@@ -202,6 +203,23 @@ def get_last_price_date(ticker: str) -> Optional[str]:
         return None
     except Exception:
         return None
+def get_price_row_count(ticker: str) -> int:
+    """
+    Hitung jumlah baris histori harga yang sudah tersimpan untuk 1 ticker.
+    Dipakai untuk deteksi "data nyangkut" (backfill lama terhenti di
+    tengah jalan) — lihat IncrementalDataUpdater.update_ticker().
+    """
+    try:
+        db = get_db()
+        result = (
+            db.table("daily_prices")
+            .select("trade_date", count="exact")
+            .eq("ticker", ticker)
+            .execute()
+        )
+        return result.count or 0
+    except Exception:
+        return 0    
 
 
 def bulk_insert_prices(records: list[dict]) -> int:
