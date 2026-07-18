@@ -20,7 +20,7 @@ from typing import Optional
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.core.logger import get_logger
-from src.core.database import get_last_price_date, bulk_insert_prices
+from src.core.database import get_last_price_date, bulk_insert_prices, get_price_row_count
 
 log = get_logger("data_provider")
 
