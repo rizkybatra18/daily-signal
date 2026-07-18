@@ -1024,8 +1024,17 @@ def analyze_stock(
             final_score=round(final_score, 1),
             signal_type=signal_type,
         )
-        analysis.score.confidence = compute_confidence(raw_score, analysis)
-        analysis.factor_contribution = build_factor_contribution(analysis, sector_bonus)
+        try:
+            analysis.score.confidence = compute_confidence(raw_score, analysis)
+        except Exception as e:
+            log.warning(f"compute_confidence gagal untuk {ticker}: {e}")
+            analysis.score.confidence = "Low"
+
+        try:
+            analysis.factor_contribution = build_factor_contribution(analysis, sector_bonus)
+        except Exception as e:
+            log.warning(f"build_factor_contribution gagal untuk {ticker}: {e}")
+            analysis.factor_contribution = {}
         
         # ── Risk Levels ─────────────────────────────────────────
         if signal_type in ("STRONG_BUY", "BUY"):
