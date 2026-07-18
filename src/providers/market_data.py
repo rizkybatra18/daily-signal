@@ -272,10 +272,21 @@ class IncrementalDataUpdater:
         self.provider = provider or MarketDataProvider()
 
     def update_ticker(self, ticker: str) -> dict:
-        """Update data satu ticker secara incremental."""
-        last_date_str = get_last_price_date(ticker)
+        """
+        Update data satu ticker secara incremental.
 
-        if last_date_str:
+        SELF-HEALING: jika ticker sudah punya last_date tapi jumlah baris
+        historinya masih sangat sedikit (< 200), ini tanda proses backfill
+        sebelumnya terhenti di tengah jalan (mis. karena timeout). Alih-alih
+        cuma menambah 1 hari ke depan (yang membuatnya PERMANEN nyangkut
+        dengan data minim), paksa download ulang penuh 252 hari.
+        """
+        last_date_str = get_last_price_date(ticker)
+        row_count = get_price_row_count(ticker) if last_date_str else 0
+
+        needs_full_refetch = (last_date_str is None) or (row_count < 200)
+
+        if last_date_str and not needs_full_refetch:
             last_date = date.fromisoformat(last_date_str)
             start_date = last_date + timedelta(days=1)
 
@@ -293,6 +304,7 @@ class IncrementalDataUpdater:
                 end_date=date.today(),
             )
         else:
+            # Ticker baru ATAU data lama tidak lengkap (< 200 baris) → full refetch
             df = self.provider.fetch_ohlcv(ticker, period="252d")
 
         if df is None or df.empty:
@@ -328,10 +340,6 @@ class IncrementalDataUpdater:
                 "change_pct": round(change_pct, 4) if change_pct is not None else None,
             })
 
-        # Daftarkan ticker ke tabel stocks dulu (cegah FK violation)
-        from src.core.database import ensure_stocks_registered
-        ensure_stocks_registered([ticker])
-
         rows_added = bulk_insert_prices(records)
         last_date = df.index[-1].date().isoformat() if not df.empty else last_date_str
 
@@ -339,7 +347,7 @@ class IncrementalDataUpdater:
             "ticker": ticker,
             "rows_added": rows_added,
             "last_date": last_date,
-            "status": "updated",
+            "status": "updated" if not needs_full_refetch else "healed",
         }
 
     def update_batch(
@@ -347,15 +355,24 @@ class IncrementalDataUpdater:
         tickers: list[str],
         max_workers: int = 2,   # Supabase nano free tier: maks 2 koneksi paralel
     ) -> dict:
-        """Update data semua ticker secara paralel."""
-        # max_workers=2 untuk Supabase free tier (nano) yang max ~20 koneksi aktif
-        # Terlalu banyak paralel → ConnectionTerminated
-        log.info(f"Incremental update untuk {len(tickers)} ticker (sequential mode untuk Supabase nano)...")
+        """
+        Update data semua ticker secara paralel.
+
+        PENTING: timeout pada as_completed() TIDAK BOLEH menggagalkan
+        seluruh scan (lihat insiden sebelumnya: TimeoutError 137/472
+        futures unfinished membuat SELURUH daily scan crash). Timeout
+        kini hanya menghentikan PENANTIAN, bukan proses itu sendiri —
+        ticker yang belum sempat selesai akan otomatis tercakup lagi
+        di scan berikutnya (statusnya tetap "belum lengkap" di DB).
+        """
+        log.info(f"Incremental update untuk {len(tickers)} ticker...")
 
         total_added = 0
         updated = 0
+        healed = 0
         up_to_date = 0
         errors = 0
+        timed_out = 0
 
         def update_one(ticker):
             try:
@@ -364,35 +381,60 @@ class IncrementalDataUpdater:
                 log.error(f"Update gagal: {ticker}: {e}")
                 return {"ticker": ticker, "rows_added": 0, "status": "error"}
 
+        # Timeout diperbesar & dibuat generatif terhadap jumlah ticker,
+        # karena full-refetch (healing) jauh lebih berat dari update
+        # incremental 1-hari biasa.
+        batch_timeout = max(600, len(tickers) * 3)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(update_one, t): t for t in tickers}
 
-            for future in concurrent.futures.as_completed(futures, timeout=300):
-                try:
-                    result = future.result()
-                    status = result.get("status", "error")
-                    if status == "updated":
-                        updated += 1
-                        total_added += result.get("rows_added", 0)
-                    elif status == "up_to_date":
-                        up_to_date += 1
-                    else:
+            try:
+                for future in concurrent.futures.as_completed(futures, timeout=batch_timeout):
+                    try:
+                        result = future.result()
+                        status = result.get("status", "error")
+
+                        if status == "updated":
+                            updated += 1
+                            total_added += result.get("rows_added", 0)
+                        elif status == "healed":
+                            healed += 1
+                            total_added += result.get("rows_added", 0)
+                        elif status == "up_to_date":
+                            up_to_date += 1
+                        else:
+                            errors += 1
+                    except Exception:
                         errors += 1
-                except Exception:
-                    errors += 1
+
+            except concurrent.futures.TimeoutError:
+                # JANGAN raise — biarkan scan lanjut dengan yang sudah selesai.
+                pending = [futures[f] for f in futures if not f.done()]
+                timed_out = len(pending)
+                log.warning(
+                    f"⚠ Update batch timeout setelah {batch_timeout}s — "
+                    f"{timed_out} ticker belum sempat diupdate kali ini "
+                    f"(akan otomatis dicoba lagi di scan berikutnya). "
+                    f"Contoh: {', '.join(pending[:10])}"
+                )
 
         summary = {
             "total_tickers": len(tickers),
             "updated": updated,
+            "healed": healed,
             "up_to_date": up_to_date,
             "errors": errors,
+            "timed_out": timed_out,
             "rows_added": total_added,
         }
 
         log.info(
-            f"Update selesai: {updated} diupdate (+{total_added} rows), "
-            f"{up_to_date} sudah terbaru, {errors} error"
+            f"Update selesai: {updated} diupdate, {healed} di-heal (data lama diisi ulang), "
+            f"+{total_added} rows, {up_to_date} sudah terbaru, {errors} error, "
+            f"{timed_out} timeout (dilanjutkan scan berikutnya)"
         )
+
         return summary
 
 
