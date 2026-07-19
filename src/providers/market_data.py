@@ -367,7 +367,7 @@ class IncrementalDataUpdater:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(update_one, t): t for t in tickers}
 
-            for future in concurrent.futures.as_completed(futures, timeout=300):
+            for future in concurrent.futures.as_completed(futures):
                 try:
                     result = future.result()
                     status = result.get("status", "error")
