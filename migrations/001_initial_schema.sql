@@ -317,7 +317,7 @@ CREATE OR REPLACE VIEW v_today_signals AS
 SELECT
     s.*,
     st.name as stock_name,
-    st.sector,
+    st.sector, as stock_sector,
     mr.regime as current_market_regime
 FROM signals s
 LEFT JOIN stocks st ON s.ticker = st.ticker
