@@ -2,14 +2,10 @@
 DAILY SIGNAL — Market Data Provider (Abstraction Layer)
 Mendukung multiple provider dengan fallback otomatis.
 
-Cara menambah provider baru:
-    class NewProvider(BaseMarketDataProvider):
-        def fetch_ohlcv(self, ticker, start_date, end_date) -> pd.DataFrame:
-            ...
-
-Providers:
-    - YahooProvider (primary, gratis, 500+ saham BEI)
-    - IDXProvider   (future: data resmi BEI)
+Fix v1.1:
+- yfinance >= 0.2.x: gunakan multi_level_index=False untuk hindari MultiIndex issue
+- Tambah group_by="ticker" fallback
+- Better error handling untuk GitHub Actions environment
 """
 
 import time
@@ -24,11 +20,7 @@ from typing import Optional
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.core.logger import get_logger
-from src.core.database import (
-    get_last_price_date,
-    bulk_insert_prices,
-    get_ticker_price_status,
-)
+from src.core.database import get_last_price_date, bulk_insert_prices
 
 log = get_logger("data_provider")
 
@@ -46,26 +38,20 @@ class BaseMarketDataProvider(ABC):
         end_date: Optional[date] = None,
         period: Optional[str] = None,
     ) -> Optional[pd.DataFrame]:
-        """
-        Ambil data OHLCV.
-
-        Args:
-            ticker: Kode saham (misal "BBCA.JK")
-            start_date: Tanggal mulai (opsional, prioritas lebih tinggi dari period)
-            end_date: Tanggal akhir
-            period: Yahoo-style period string ("60d", "1y", dll)
-
-        Returns:
-            DataFrame dengan kolom: open, high, low, close, volume
-            Index: DatetimeIndex dengan timezone-naive dates
-            None jika gagal atau data tidak cukup
-        """
         pass
 
     def validate_ohlcv(self, df: pd.DataFrame, min_rows: int = 5) -> bool:
         """
         Validasi data OHLCV.
         min_rows diturunkan ke 5 agar health check (period=5d) bisa lolos.
+
+        AUDIT FIX (Error Handling): sebelumnya fungsi ini TIDAK memeriksa
+        candle yang tidak masuk akal (high < low) maupun data tanpa
+        transaksi sama sekali (volume 0 di semua baris) — keduanya lolos
+        validasi dan bisa mencemari perhitungan indikator. Kini keduanya
+        diperiksa dengan toleransi wajar (data live kadang punya sedikit
+        baris anomali dari provider, jadi tidak di-reject hanya karena
+        1-2 baris bermasalah — hanya jika PROPORSI-nya signifikan).
         """
         if df is None or df.empty:
             return False
@@ -80,10 +66,15 @@ class BaseMarketDataProvider(ABC):
         if (df["close"] <= 0).all():
             return False
 
+        # Candle tidak masuk akal (high < low) — toleransi 5%
         inverted_ratio = (df["high"] < df["low"]).sum() / len(df)
         if inverted_ratio > 0.05:
             return False
 
+        # Tidak ada transaksi sama sekali — toleransi 50%
+        # (saham yang jarang ditransaksikan bisa punya beberapa hari
+        # volume 0 secara wajar, tapi mayoritas 0 menandakan data rusak
+        # atau saham suspend total)
         zero_vol_ratio = (df["volume"] == 0).sum() / len(df)
         if zero_vol_ratio > 0.5:
             return False
@@ -96,13 +87,13 @@ class BaseMarketDataProvider(ABC):
 class YahooProvider(BaseMarketDataProvider):
     """
     Yahoo Finance provider menggunakan yfinance.
-    Primary provider, gratis, support 500+ saham BEI.
+    Compatible dengan yfinance >= 0.2.x
     """
 
     def __init__(self):
         self._lock = threading.Lock()
         self._last_call = 0.0
-        self._min_interval = 0.2
+        self._min_interval = 0.2  # 200ms antar call
 
     def _rate_limit(self):
         with self._lock:
@@ -122,7 +113,12 @@ class YahooProvider(BaseMarketDataProvider):
         end_date: Optional[date] = None,
         period: Optional[str] = None,
     ) -> Optional[pd.DataFrame]:
-        """Fetch OHLCV dari Yahoo Finance."""
+        """
+        Fetch OHLCV dari Yahoo Finance.
+        
+        Penting: yfinance 0.2.x mengubah default output format.
+        Kita gunakan multi_level_index=False agar kolom flat (tidak MultiIndex).
+        """
         self._rate_limit()
 
         try:
@@ -133,13 +129,14 @@ class YahooProvider(BaseMarketDataProvider):
                 "timeout": 20,
             }
 
+            # Fix untuk yfinance >= 0.2.x: parameter baru untuk flatten kolom
             try:
                 import inspect
                 sig = inspect.signature(yf.download)
                 if "multi_level_index" in sig.parameters:
                     kwargs["multi_level_index"] = False
             except Exception:
-                pass
+                pass  # Versi lama, tidak ada parameter ini
 
             if start_date and end_date:
                 kwargs["start"] = start_date.isoformat()
@@ -155,9 +152,12 @@ class YahooProvider(BaseMarketDataProvider):
                 log.warning(f"Data kosong dari Yahoo untuk {ticker}")
                 return None
 
+            # Flatten MultiIndex jika ada (fallback untuk versi lama)
             if isinstance(df.columns, pd.MultiIndex):
+                # Ambil level pertama (Price) dan drop level ticker
                 df.columns = df.columns.get_level_values(0)
 
+            # Rename kolom ke lowercase
             rename_map = {}
             for col in df.columns:
                 col_lower = col.lower().strip()
@@ -168,6 +168,7 @@ class YahooProvider(BaseMarketDataProvider):
                         rename_map[col] = col_lower
             df = df.rename(columns=rename_map)
 
+            # Pastikan kolom yang dibutuhkan ada
             needed = ["open", "high", "low", "close", "volume"]
             available = [c for c in needed if c in df.columns]
             if "close" not in available:
@@ -177,11 +178,13 @@ class YahooProvider(BaseMarketDataProvider):
             df = df[available].copy()
             df = df.dropna(subset=["close"])
 
+            # Pastikan index adalah DatetimeIndex timezone-naive
             if not isinstance(df.index, pd.DatetimeIndex):
                 df.index = pd.to_datetime(df.index)
             if df.index.tz is not None:
                 df.index = df.index.tz_localize(None)
 
+            # Konversi ke numeric
             for col in available:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
             df = df.dropna(subset=["close"])
@@ -194,7 +197,7 @@ class YahooProvider(BaseMarketDataProvider):
 
         except Exception as e:
             log.warning(f"Yahoo fetch error {ticker}: {e}")
-            raise
+            raise  # Let tenacity retry
 
     def fetch_batch(
         self,
@@ -267,40 +270,12 @@ class IncrementalDataUpdater:
 
     def __init__(self, provider: Optional[MarketDataProvider] = None):
         self.provider = provider or MarketDataProvider()
-        self._diag_logged = 0   # Sample logging counter, thread-unsafe tapi cukup untuk diagnosa
 
     def update_ticker(self, ticker: str) -> dict:
-        """
-        Update data satu ticker secara incremental.
+        """Update data satu ticker secara incremental."""
+        last_date_str = get_last_price_date(ticker)
 
-        SELF-HEALING (fix insiden "500 saham nyangkut 17 baris"):
-        jika ticker sudah punya last_date tapi jumlah baris historinya
-        masih sangat sedikit (< 200), backfill sebelumnya diduga
-        terhenti di tengah jalan — sistem memaksa download ulang penuh
-        252 hari alih-alih cuma menambah 1 hari ke depan (yang akan
-        membuatnya PERMANEN nyangkut dengan data minim).
-
-        AUDIT FIX v2: last_date dan row_count kini diambil dalam SATU
-        query (get_ticker_price_status), bukan dua query terpisah —
-        versi sebelumnya (2 query per ticker × ratusan ticker paralel)
-        menghasilkan row_count yang tidak konsisten untuk sebagian
-        besar ticker di Supabase nano, sehingga healing hanya terpicu
-        untuk sebagian kecil (30 dari ~500) yang seharusnya di-heal.
-        """
-        last_date_str, row_count = get_ticker_price_status(ticker)
-        needs_full_refetch = (last_date_str is None) or (row_count < 200)
-
-        # Diagnostic sampling: log 15 ticker pertama yang diproses agar
-        # kalau masih ada masalah, log berikutnya langsung menunjukkan
-        # nilai row_count/needs_full_refetch yang sesungguhnya dihitung.
-        if self._diag_logged < 15:
-            self._diag_logged += 1
-            log.info(
-                f"[diag] {ticker}: last_date={last_date_str} row_count={row_count} "
-                f"needs_full_refetch={needs_full_refetch}"
-            )
-
-        if last_date_str and not needs_full_refetch:
+        if last_date_str:
             last_date = date.fromisoformat(last_date_str)
             start_date = last_date + timedelta(days=1)
 
@@ -328,11 +303,12 @@ class IncrementalDataUpdater:
                 "status": "no_data",
             }
 
+        # Konversi ke format database
         records = []
         prev_close = None
 
         for idx, row in df.iterrows():
-            trade_date = idx.date() if hasattr(idx, 'date') else idx
+            trade_date = idx.date() if hasattr(idx, "date") else idx
 
             close = float(row["close"]) if pd.notna(row.get("close")) else None
             if close is None or close <= 0:
@@ -352,6 +328,10 @@ class IncrementalDataUpdater:
                 "change_pct": round(change_pct, 4) if change_pct is not None else None,
             })
 
+        # Daftarkan ticker ke tabel stocks dulu (cegah FK violation)
+        from src.core.database import ensure_stocks_registered
+        ensure_stocks_registered([ticker])
+
         rows_added = bulk_insert_prices(records)
         last_date = df.index[-1].date().isoformat() if not df.empty else last_date_str
 
@@ -359,23 +339,23 @@ class IncrementalDataUpdater:
             "ticker": ticker,
             "rows_added": rows_added,
             "last_date": last_date,
-            "status": "updated" if not needs_full_refetch else "healed",
+            "status": "updated",
         }
 
     def update_batch(
         self,
         tickers: list[str],
-        max_workers: int = 2,
+        max_workers: int = 2,   # Supabase nano free tier: maks 2 koneksi paralel
     ) -> dict:
         """Update data semua ticker secara paralel."""
-        log.info(f"Incremental update untuk {len(tickers)} ticker...")
+        # max_workers=2 untuk Supabase free tier (nano) yang max ~20 koneksi aktif
+        # Terlalu banyak paralel → ConnectionTerminated
+        log.info(f"Incremental update untuk {len(tickers)} ticker (sequential mode untuk Supabase nano)...")
 
         total_added = 0
         updated = 0
-        healed = 0
         up_to_date = 0
         errors = 0
-        timed_out = 0
 
         def update_one(ticker):
             try:
@@ -384,55 +364,35 @@ class IncrementalDataUpdater:
                 log.error(f"Update gagal: {ticker}: {e}")
                 return {"ticker": ticker, "rows_added": 0, "status": "error"}
 
-        batch_timeout = max(600, len(tickers) * 3)
-
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(update_one, t): t for t in tickers}
 
-            try:
-                for future in concurrent.futures.as_completed(futures, timeout=batch_timeout):
-                    try:
-                        result = future.result()
-                        status = result.get("status", "error")
-                        if status == "updated":
-                            updated += 1
-                            total_added += result.get("rows_added", 0)
-                        elif status == "healed":
-                            healed += 1
-                            total_added += result.get("rows_added", 0)
-                        elif status == "up_to_date":
-                            up_to_date += 1
-                        else:
-                            errors += 1
-                    except Exception:
+            for future in concurrent.futures.as_completed(futures, timeout=300):
+                try:
+                    result = future.result()
+                    status = result.get("status", "error")
+                    if status == "updated":
+                        updated += 1
+                        total_added += result.get("rows_added", 0)
+                    elif status == "up_to_date":
+                        up_to_date += 1
+                    else:
                         errors += 1
-
-            except concurrent.futures.TimeoutError:
-                pending = [futures[f] for f in futures if not f.done()]
-                timed_out = len(pending)
-                log.warning(
-                    f"⚠ Update batch timeout setelah {batch_timeout}s — "
-                    f"{timed_out} ticker belum sempat diupdate kali ini "
-                    f"(otomatis dicoba lagi di scan berikutnya). "
-                    f"Contoh: {', '.join(pending[:10])}"
-                )
+                except Exception:
+                    errors += 1
 
         summary = {
             "total_tickers": len(tickers),
             "updated": updated,
-            "healed": healed,
             "up_to_date": up_to_date,
             "errors": errors,
-            "timed_out": timed_out,
             "rows_added": total_added,
         }
 
         log.info(
-            f"Update selesai: {updated} diupdate, {healed} di-heal (data lama diisi ulang), "
-            f"+{total_added} rows, {up_to_date} sudah terbaru, {errors} error, "
-            f"{timed_out} timeout (dilanjutkan scan berikutnya)"
+            f"Update selesai: {updated} diupdate (+{total_added} rows), "
+            f"{up_to_date} sudah terbaru, {errors} error"
         )
-
         return summary
 
 

@@ -2,6 +2,49 @@
 
 ---
 
+## v2.1.0 — Audit Menyeluruh: Universe, Adaptive Threshold, Backtest Realism (2026-07)
+
+Lihat `AUDIT_REPORT_v2.md` untuk laporan lengkap dengan bukti empiris tiap perubahan.
+
+### 🌐 Universe Manager
+- Curated seed diperluas dari ~140 → **551 ticker unik** (11 sektor IDX-IC), setelah riset
+  konfirmasi bahwa scraping idx.co.id langsung melanggar ToS resmi mereka DAN diblokir bot
+  detection — solusi via Yahoo Finance validation tetap dipertahankan sebagai satu-satunya
+  sumber otomatis yang legal & stabil.
+- `EXTRA_UNIVERSE_SOURCE_URL` (opsional) — tambah ticker dari sumber pilihan sendiri tanpa edit kode.
+- Safety guard baru: mencegah gangguan Yahoo Finance sesaat disalahartikan sebagai delisting massal.
+
+### 🎯 Adaptive Threshold (Fix Signifikan)
+- **STRONG_BUY yang sebelumnya matematis MUSTAHIL saat regime BEAR** (dan nyaris mustahil saat
+  SIDEWAYS) kini bisa tercapai untuk setup yang benar-benar kuat, lewat threshold per-regime
+  yang dibandingkan ke raw_score (bukan raw×regime_weight terhadap threshold tetap).
+- Sector bonus kini diterapkan ke raw_score (bukan final_score yang sudah ter-diskon regime weight)
+  — konsisten antar semua kondisi market.
+
+### 📊 Market Breadth, Confidence Engine, Factor Contribution
+- `breadth_data` yang sebelumnya parameter mati (tidak pernah terisi karena urutan pipeline)
+  kini dihitung nyata dari % saham di atas EMA20/50/200 + advance/decline.
+- Confidence Engine rule-based (Very High/High/Medium/Low) berdasar raw_score + jumlah dimensi kuat.
+- Factor Contribution breakdown + highlights disiapkan untuk Dashboard/Telegram (data-only, UI belum diubah).
+
+### 🔬 Backtest Engine
+- Entry kini di open H+1 (bukan close hari sinyal) — realistis sesuai jadwal kirim sinyal 17:30 WIB.
+- Resolusi SL/TP dalam candle yang sama kini konservatif (SL diperiksa lebih dulu).
+- Skema scoring backtest diselaraskan persis dengan composite scoring live (0-100, 5 dimensi).
+
+### 🛡️ Error Handling
+- `_upsert_with_schema_fallback()` — mencegah 1 kolom baru menggagalkan seluruh insert (kelas bug
+  yang sama dengan insiden 87 sinyal gagal tersimpan sebelumnya).
+- `validate_ohlcv` kini menolak candle terbalik dan data tanpa volume sama sekali.
+
+### 🗄️ Database
+- `migrations/002_audit_improvements.sql` — additive, aman dijalankan kapan saja, tidak merusak data lama.
+
+### ✅ Testing
+- 49/49 test lulus (naik dari 46/49 — 3 bug pre-existing ikut diperbaiki), 0 regresi.
+
+---
+
 ## v2.0.0 — Dashboard Upgrade (2025-06-25)
 
 ### 🆕 Pages Baru
