@@ -396,7 +396,7 @@ def _analyze_all_parallel(
             for item in stock_data.items()
         }
         
-        for future in concurrent.futures.as_completed(futures, timeout=300):
+        for future in concurrent.futures.as_completed(futures):
             ticker = futures[future]
             completed += 1
             
