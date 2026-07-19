@@ -318,7 +318,7 @@ SELECT
     s.*,
     st.name as stock_name,
     st.sector,
-    mr.regime as market_regime
+    mr.regime as current_market_regime
 FROM signals s
 LEFT JOIN stocks st ON s.ticker = st.ticker
 LEFT JOIN market_regimes mr ON mr.regime_date = s.signal_date
