@@ -201,12 +201,10 @@ def get_last_price_date(ticker: str) -> Optional[str]:
 def get_price_row_count(ticker: str) -> int:
     """
     Hitung jumlah baris histori harga yang sudah tersimpan untuk 1 ticker.
-
-    Dipakai untuk deteksi "data nyangkut" — kasus di mana proses backfill
-    252 hari sebelumnya terhenti di tengah jalan (mis. karena timeout batch
-    update) sehingga ticker hanya punya belasan baris data, lalu selamanya
-    cuma di-update 1 hari ke depan karena `get_last_price_date` sudah
-    mengembalikan nilai (bukan None) — lihat IncrementalDataUpdater.update_ticker().
+    Dipertahankan untuk backward-compat — untuk update_ticker(), pakai
+    get_ticker_price_status() (1 query gabungan) alih-alih dua panggilan
+    terpisah (get_last_price_date + get_price_row_count) demi mengurangi
+    beban koneksi paralel ke Supabase nano.
     """
     try:
         db = get_db()
@@ -219,6 +217,43 @@ def get_price_row_count(ticker: str) -> int:
         return result.count or 0
     except Exception:
         return 0
+
+
+def get_ticker_price_status(ticker: str) -> tuple[Optional[str], int]:
+    """
+    Dapatkan last_date DAN row_count sekaligus dalam SATU query.
+
+    AUDIT FIX (insiden "500 saham tetap rows=17 walau healing sudah aktif"):
+    versi sebelumnya melakukan 2 query terpisah (get_last_price_date lalu
+    get_price_row_count) per ticker. Dengan 514 ticker × 2 query paralel
+    di bawah ThreadPoolExecutor yang berbagi 1 Supabase client instance,
+    ditemukan hasil yang tidak konsisten untuk sebagian besar ticker
+    (row_count computed salah/tinggi padahal data asli cuma 17 baris) —
+    kelas bug yang sama dengan insiden ConnectionTerminated sebelumnya
+    di sistem ini (Supabase nano sensitif terhadap request paralel).
+
+    PostgREST bisa mengembalikan COUNT TOTAL (lewat header Content-Range)
+    BERSAMAAN dengan data yang di-limit — jadi last_date dan row_count
+    bisa didapat dari SATU request, bukan dua, menghilangkan celah
+    inkonsistensi sekaligus mengurangi beban koneksi jadi setengahnya.
+
+    Return: (last_date_iso_atau_None, row_count)
+    """
+    try:
+        db = get_db()
+        result = (
+            db.table("daily_prices")
+            .select("trade_date", count="exact")
+            .eq("ticker", ticker)
+            .order("trade_date", desc=True)
+            .limit(1)
+            .execute()
+        )
+        last_date = result.data[0]["trade_date"] if result.data else None
+        row_count = result.count if result.count is not None else 0
+        return last_date, row_count
+    except Exception:
+        return None, 0
 
 
 def bulk_insert_prices(records: list[dict]) -> int:
@@ -267,16 +302,6 @@ def _upsert_with_schema_fallback(
     """
     Upsert/insert dengan fallback otomatis jika ada kolom yang belum
     ada di schema Supabase (PGRST204 "column not found in schema cache").
-
-    AUDIT NOTE (Error Handling): Insiden produksi sebelumnya menunjukkan
-    bahwa satu field tak dikenal di payload membuat SELURUH insert gagal
-    (mis. seluruh 87 sinyal gagal tersimpan karena 1 kolom `analysis_date`
-    yang tidak ada di schema). Helper ini mencegah kejadian serupa: jika
-    error menyebut kolom yang memang termasuk fitur BARU (belum tentu
-    migration sudah dijalankan user), kolom itu dibuang dan insert
-    dicoba ulang SEKALI dengan payload yang sudah dibersihkan.
-
-    Return: (success, result_data_or_None)
     """
     import re as _re
 
