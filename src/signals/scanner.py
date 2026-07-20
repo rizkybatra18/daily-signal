@@ -328,6 +328,8 @@ def _load_batch_from_db(
 
     df_all = pd.DataFrame(all_rows)
     df_all["trade_date"] = pd.to_datetime(df_all["trade_date"])
+    log.info(f"[DEBUG] Total rows loaded: {len(df_all)}")
+    log.info(f"[DEBUG] AGRO.JK rows in df_all: {len(df_all[df_all['ticker']=='AGRO.JK'])}")
 
     for ticker in tickers:
         df_t = df_all[df_all["ticker"] == ticker].copy()
