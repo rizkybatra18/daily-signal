@@ -37,7 +37,6 @@ def cmd_test_telegram(args):
         log.error("❌ TELEGRAM_CHAT_ID kosong! Cek GitHub Secrets.")
         sys.exit(1)
 
-    # Test 1: getMe — cek apakah token valid
     log.info("  Test 1: Validasi token via getMe...")
     resp = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
     if resp.ok:
@@ -47,7 +46,6 @@ def cmd_test_telegram(args):
         log.error(f"  ❌ Token tidak valid: {resp.status_code} {resp.text[:200]}")
         sys.exit(1)
 
-    # Test 2: sendMessage — kirim pesan test
     log.info(f"  Test 2: Kirim pesan ke chat_id={chat_id}...")
     now = datetime.now(WIB).strftime("%d %b %Y %H:%M WIB")
     msg = (
@@ -68,7 +66,6 @@ def cmd_test_telegram(args):
         err = resp2.json()
         log.error(f"  ❌ Gagal kirim: {resp2.status_code}")
         log.error(f"  Detail: {err}")
-        # Diagnosis error umum
         desc = err.get("description", "")
         if "chat not found" in desc:
             log.error("  → CHAT_ID salah atau bot belum di-add ke grup/channel")
@@ -97,8 +94,8 @@ def cmd_pre_market(args):
     """
     Kirim alert pre-market (08:30 WIB).
 
-    Mengambil regime dari DATABASE (hasil scan kemarin) — bukan hitung ulang.
-    Alasan:
+    Mengambil regime dari DATABASE (hasil scan kemarin) — bukan hitung
+    ulang. Alasan:
       1. Jam 08:30 WIB Yahoo Finance belum update candle hari ini
       2. Data regime terbaru sudah tersimpan di DB dari scan 17:30 kemarin
       3. Konsisten dengan angka yang ditampilkan di daily scan sebelumnya
@@ -108,7 +105,6 @@ def cmd_pre_market(args):
 
     log.info("▶ Pre-market alert (ambil regime dari DB)...")
 
-    # Selalu dari DB — konsisten dengan daily scan sebelumnya
     regime = get_latest_regime()
 
     if regime:
@@ -126,7 +122,6 @@ def cmd_health_check(args):
 
     log.info("▶ Health check...")
 
-    # Database
     db_status = db_health()
     log.info(f"  database: {db_status}")
     if db_status["status"] != "healthy":
@@ -138,13 +133,11 @@ def cmd_health_check(args):
         log.error("❌ Tabel tidak lengkap — jalankan migrations/001_initial_schema.sql")
         sys.exit(1)
 
-    # Telegram
     tg = check_telegram_health()
     log.info(f"  telegram: {tg}")
     if tg["status"] != "healthy":
         log.warning(f"⚠ Telegram: {tg.get('error','unknown')}")
 
-    # Data provider
     from src.providers.market_data import MarketDataProvider
     try:
         provider = MarketDataProvider()
@@ -250,7 +243,7 @@ def main():
     parser = argparse.ArgumentParser(description="DAILY SIGNAL Runner")
     parser.add_argument("command", choices=[
         "daily_scan", "pre_market", "health_check",
-        "test_telegram",          # ← BARU: diagnosa Telegram
+        "test_telegram",
         "refresh_universe", "run_backtests", "db_cleanup",
         "update_portfolio", "portfolio_snapshot", "weekly_report",
     ])
@@ -262,7 +255,7 @@ def main():
         "daily_scan":        cmd_daily_scan,
         "pre_market":        cmd_pre_market,
         "health_check":      cmd_health_check,
-        "test_telegram":     cmd_test_telegram,   # ← BARU
+        "test_telegram":     cmd_test_telegram,
         "refresh_universe":  cmd_refresh_universe,
         "run_backtests":     cmd_run_backtests,
         "db_cleanup":        cmd_db_cleanup,

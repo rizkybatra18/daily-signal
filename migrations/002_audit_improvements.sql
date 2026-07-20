@@ -1,6 +1,6 @@
 -- ════════════════════════════════════════════════════════════════
 --  DAILY SIGNAL — Migration 002: Audit Improvements
---  Version: 2.0.0
+--  Version: 2.1.0
 --  Jalankan via Supabase SQL Editor SETELAH 001_initial_schema.sql
 --
 --  Migration ini 100% ADDITIVE — tidak menghapus/mengubah kolom
@@ -8,7 +8,7 @@
 --  dijalankan kapan saja, dan aman DIULANG (idempotent) berkat
 --  IF NOT EXISTS di setiap statement.
 --
---  Latar belakang: lihat AUDIT_REPORT.md bagian:
+--  Latar belakang: lihat AUDIT_REPORT_v2.md bagian:
 --    - Market Breadth Audit       → kolom pct_above_ema20/50/200
 --    - Factor Contribution        → kolom factor_contribution (JSONB)
 --    - Confidence Engine          → kolom confidence, raw_score, sector_bonus

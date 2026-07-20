@@ -42,12 +42,12 @@ def run_daily_scan(
 ) -> dict:
     """
     Jalankan full daily scan pipeline.
-    
+
     Args:
         top_n: Jumlah sinyal teratas yang dikirim ke Telegram (default dari settings)
         save_to_db: Simpan sinyal ke database
         send_telegram: Kirim sinyal ke Telegram
-    
+
     Returns:
         dict berisi: {
             "run_id": str,
@@ -60,23 +60,23 @@ def run_daily_scan(
     run_id = str(uuid.uuid4())
     start_time = time.time()
     top_n = top_n or settings.top_n_signals
-    
+
     log.info(f"═══ DAILY SIGNAL SCAN DIMULAI [run_id={run_id[:8]}] ═══")
-    
+
     log_scan_run({
         "run_id": run_id,
         "run_type": "DAILY_SCAN",
         "started_at": datetime.utcnow().isoformat(),
         "status": "RUNNING",
     })
-    
+
     try:
         # ── Step 1: Dapatkan Universe ──────────────────────────────
         log.info("[1/8] Mengambil universe saham BEI...")
         all_tickers = get_all_bei_tickers()
         universe_count = len(all_tickers)
         log.info(f"      → {universe_count} ticker di universe")
-        
+
         # ── Step 2: Update Data Incremental ───────────────────────
         log.info("[2/8] Update data harga (incremental)...")
         n_registered = ensure_stocks_registered(all_tickers)
@@ -111,20 +111,20 @@ def run_daily_scan(
             f"Breadth: {regime.breadth_score:.0f}% naik, "
             f"{regime.pct_above_ema50:.0f}% di atas EMA50"
         )
-        
+
         if regime.regime == "BEAR":
             log.warning(
                 "Market BEAR — scan tetap dijalankan, threshold sinyal diperketat "
                 f"otomatis (STRONG_BUY>={settings.adaptive_thresholds['BEAR']['strong_buy']:.0f}, "
                 "bukan disuppress total — saham reversal awal tetap bisa terdeteksi)"
             )
-        
+
         # ── Step 5: Sector Rotation ────────────────────────────────
         log.info("[5/8] Menghitung sector rotation...")
         sector_rankings = calculate_sector_rankings(stock_data)
         top_sectors = [f"#{sr.rank} {sr.sector}" for sr in sector_rankings[:3]]
         log.info(f"      → Top 3 sektor: {', '.join(top_sectors)}")
-        
+
         # ── Step 6: Analisis TA per Saham (Parallel) ──────────────
         log.info(f"[6/8] Analisis teknikal {len(stock_data)} saham (parallel)...")
         analyses = _analyze_all_parallel(
@@ -136,14 +136,14 @@ def run_daily_scan(
             max_workers=4,
         )
         analyzed_count = len(analyses)
-        
+
         # ── Step 7: Filter, Sort, Funnel ────────────────────────────
         log.info("[7/8] Filter & ranking...")
         passed = [a for a in analyses if a.passed_basic_filter]
         technical_pass_count = len(passed)
 
         passed.sort(key=lambda a: a.score.final_score, reverse=True)
-        
+
         strong_buy = [a for a in passed if a.score.signal_type == "STRONG_BUY"]
         buy = [a for a in passed if a.score.signal_type == "BUY"]
         watchlist = [a for a in passed if a.score.signal_type == "WATCHLIST"]
@@ -162,7 +162,7 @@ def run_daily_scan(
             "strong_buy": len(strong_buy),
         }
         _log_funnel(funnel, regime.regime)
-        
+
         # ── Simpan ke Database ─────────────────────────────────────
         signal_ids = []
         if save_to_db:
@@ -187,14 +187,14 @@ def run_daily_scan(
                 if signal_id:
                     signal_ids.append(signal_id)
             log.info(f"✓ {len(signal_ids)} sinyal tersimpan")
-        
+
         # ── Kirim ke Telegram ─────────────────────────────────────
         if send_telegram:
             _send_signals_telegram(top_signals, regime, sector_rankings)
-        
+
         # ── Finish ────────────────────────────────────────────────
         duration = time.time() - start_time
-        
+
         summary = {
             "stocks_scanned": len(analyses),
             "passed_filter": len(passed),
@@ -207,7 +207,7 @@ def run_daily_scan(
             "duration_seconds": round(duration, 1),
             "funnel": funnel,
         }
-        
+
         update_scan_run(run_id, {
             "completed_at": datetime.utcnow().isoformat(),
             "status": "SUCCESS",
@@ -215,13 +215,13 @@ def run_daily_scan(
             "signals_generated": summary["strong_buy"] + summary["buy"],
             "duration_seconds": int(duration),
         })
-        
+
         log.info(
             f"═══ SCAN SELESAI dalam {duration:.1f}s ═══ | "
             f"STRONG_BUY={len(strong_buy)} BUY={len(buy)} "
             f"WATCHLIST={len(watchlist)}"
         )
-        
+
         return {
             "run_id": run_id,
             "regime": regime,
@@ -231,18 +231,18 @@ def run_daily_scan(
             "summary": summary,
             "duration_seconds": duration,
         }
-        
+
     except Exception as e:
         duration = time.time() - start_time
         log.error(f"Scan gagal setelah {duration:.1f}s: {e}", exc=e)
-        
+
         update_scan_run(run_id, {
             "completed_at": datetime.utcnow().isoformat(),
             "status": "FAILED",
             "error_message": str(e)[:500],
             "duration_seconds": int(duration),
         })
-        
+
         raise
 
 
@@ -367,7 +367,7 @@ def _analyze_all_parallel(
     results = []
     total = len(stock_data)
     completed = 0
-    
+
     none_count = 0
     none_samples = []
     exc_count = 0
@@ -401,7 +401,27 @@ def _analyze_all_parallel(
             if len(exc_samples) < 8:
                 exc_samples.append(f"{ticker}: {type(e).__name__}: {e}")
             return None
-    
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(analyze_one, item): item[0]
+            for item in stock_data.items()
+        }
+
+        for future in concurrent.futures.as_completed(futures, timeout=300):
+            ticker = futures[future]
+            completed += 1
+
+            try:
+                result = future.result()
+                if result is not None:
+                    results.append(result)
+            except Exception as e:
+                log.debug(f"Analisis error {ticker}: {e}")
+
+            if completed % 50 == 0:
+                log.info(f"  Progress: {completed}/{total} saham dianalisis...")
+
     log.info(f"Analisis selesai: {len(results)}/{total} berhasil")
 
     if none_count > 0:
@@ -438,17 +458,17 @@ def run_health_check() -> dict:
     Return dict status semua komponen.
     """
     from src.core.database import health_check as db_health
-    
+
     results = {}
-    
+
     results["database"] = db_health()
-    
+
     try:
         from src.telegram.bot import check_telegram_health
         results["telegram"] = check_telegram_health()
     except Exception as e:
         results["telegram"] = {"status": "error", "error": str(e)}
-    
+
     try:
         provider = MarketDataProvider()
         df = provider.fetch_ohlcv("BBCA.JK", period="5d")
@@ -459,12 +479,12 @@ def run_health_check() -> dict:
         }
     except Exception as e:
         results["data_provider"] = {"status": "error", "error": str(e)}
-    
+
     overall = "healthy" if all(
         r.get("status") == "healthy" for r in results.values()
     ) else "degraded"
-    
+
     results["overall"] = overall
     log.info(f"Health check: {overall}")
-    
+
     return results

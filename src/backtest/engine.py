@@ -4,7 +4,7 @@ Walk-forward backtest: deterministic, reproducible, tanpa look-ahead
 bias, dengan transaction cost dan model eksekusi yang realistis.
 
 ═══════════════════════════════════════════════════════════════════
-AUDIT NOTE (Backtest Audit — lihat AUDIT_REPORT.md untuk detail)
+AUDIT NOTE (Backtest Audit — lihat AUDIT_REPORT_v2.md untuk detail)
 ═══════════════════════════════════════════════════════════════════
 Tidak ditemukan data leakage / look-ahead bias literal (semua indikator
 memakai .ewm()/.rolling()/.shift() yang murni backward-looking).
@@ -368,13 +368,8 @@ def _simulate_trade(
     signal_row = df.iloc[signal_idx]
     signal_date = str(df.index[signal_idx])[:10]
 
-    # ATR diketahui saat sinyal terbentuk (bukan leakage)
     atr = signal_row.get("atr", None)
     if atr is None or pd.isna(atr) or atr <= 0:
-        # Fallback: dari range high-low hari sinyal itu sendiri (kasar,
-        # hanya dipakai jika kolom 'atr' benar-benar tidak tersedia —
-        # backtest produksi SELALU sudah punya kolom 'atr' dari
-        # _add_indicators, fallback ini murni untuk robustness)
         try:
             atr = float(signal_row["high"]) - float(signal_row["low"])
         except Exception:
@@ -471,7 +466,6 @@ def _run_period_backtest(
     trades = []
     start_idx = MIN_WARMUP_ROWS
 
-    # -2 karena _simulate_trade butuh signal_idx+1 (entry bar) yang valid
     for i in range(start_idx, len(df) - FORWARD_CANDLES - 2):
         row = df.iloc[i]
 
@@ -491,8 +485,6 @@ def _run_period_backtest(
 
         trade = _simulate_trade(df, i, ticker=ticker)
 
-        # Trade yang tidak benar-benar tereksekusi (data habis / invalid)
-        # tidak dihitung sebagai trade sungguhan.
         if trade.exit_reason in ("INVALID", "NO_NEXT_BAR"):
             continue
 

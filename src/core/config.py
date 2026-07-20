@@ -1,34 +1,34 @@
 """
-DAILY SIGNAL — Core Configuration
-Semua konfigurasi dari environment variables. Tidak ada hardcoded secrets.
+DAILY SIGNAL — Configuration
+Semua parameter sistem terpusat di sini. Baca dari environment
+variables (.env lokal, atau GitHub Secrets di production).
 """
 
-import os
-from functools import lru_cache
-from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class Settings(BaseSettings):
-    """
-    Semua konfigurasi sistem.
-    Nilai diambil dari environment variables atau file .env
-    """
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
-    # ── Supabase ────────────────────────────────────────────────
+    # ── Supabase ──────────────────────────────────────────────────
     supabase_url: str
     supabase_service_key: str
 
-    # ── Telegram ────────────────────────────────────────────────
+    # ── Telegram ──────────────────────────────────────────────────
     telegram_bot_token: str
     telegram_chat_id: str
 
-    # ── App ─────────────────────────────────────────────────────
-    app_env: str = "production"
+    # ── App ───────────────────────────────────────────────────────
+    app_env: str = "development"
     log_level: str = "INFO"
-    tz: str = "Asia/Jakarta"
+    timezone: str = "Asia/Jakarta"
 
-    # ── Market ──────────────────────────────────────────────────
+    # ── Data Provider ─────────────────────────────────────────────
     ihsg_ticker: str = "^JKSE"
     min_price: float = 100.0
     min_volume: int = 500_000
@@ -40,10 +40,10 @@ class Settings(BaseSettings):
     # AUDIT FINDING: idx.co.id secara eksplisit MELARANG web scraping/
     # crawling di Syarat Penggunaan mereka (poin 6), dan situs mereka
     # memblokir request otomatis (bot detection). Karena itu, scraping
-    # IDX langsung TIDAK dipakai — lihat AUDIT_REPORT.md untuk detail
+    # IDX langsung TIDAK dipakai — lihat AUDIT_REPORT_v2.md untuk detail
     # riset dan alasan teknis+legal lengkapnya.
     #
-    # Solusi: curated seed list diperluas signifikan (~700+ ticker,
+    # Solusi: curated seed list diperluas signifikan (~550 ticker,
     # representasi mayoritas saham aktif BEI dari seluruh sektor),
     # lalu SETIAP ticker divalidasi likuiditasnya via Yahoo Finance
     # (bukan sekadar dipakai mentah). Ticker yang tidak lagi ada
@@ -58,36 +58,26 @@ class Settings(BaseSettings):
     universe_min_expected: int = 100   # Alert jika universe tiba-tiba menyusut drastis
 
     # ── Technical Analysis ──────────────────────────────────────
-    # EMA periods
-    ema_fast: int = 20
-    ema_mid: int = 50
-    ema_slow: int = 200
-
-    # RSI
     rsi_period: int = 14
     rsi_oversold: float = 30.0
     rsi_overbought: float = 70.0
 
-    # MACD
     macd_fast: int = 12
     macd_slow: int = 26
     macd_signal: int = 9
 
-    # ADX
     adx_period: int = 14
-    adx_strong: float = 25.0       # ADX > 25 = trend kuat
+    adx_strong: float = 25.0
 
-    # ATR
     atr_period: int = 14
-    atr_sl_multiplier: float = 1.5   # SL = entry ± 1.5 × ATR
-    atr_tp1_multiplier: float = 1.5  # TP1 = entry ± 1.5 × ATR
-    atr_tp2_multiplier: float = 2.5  # TP2 = entry ± 2.5 × ATR
+    atr_sl_multiplier: float = 1.5
+    atr_tp1_multiplier: float = 2.0
+    atr_tp2_multiplier: float = 3.5
 
-    # Volume
-    volume_spike_threshold: float = 1.5   # Volume > 1.5x avg = spike
+    volume_spike_threshold: float = 2.0
     avg_volume_period: int = 20
 
-    # ── Scoring Weights (total harus 100) ───────────────────────
+    # ── Composite Scoring Weights (0-100 total) ──────────────────
     weight_trend: float = 30.0       # EMA alignment + price vs EMA
     weight_momentum: float = 25.0    # RSI + MACD
     weight_volume: float = 20.0      # Volume ratio + spike
@@ -135,39 +125,9 @@ class Settings(BaseSettings):
     min_win_rate: float = 0.55
     min_pattern_count: int = 10
 
-    # ── Data History ────────────────────────────────────────────
+    # ── Data History ──────────────────────────────────────────────
     history_days_warmup: int = 252    # ~1 tahun untuk warm up indikator
-    history_days_scan: int = 60       # Data yang diambil untuk scan
-
-    @field_validator("app_env")
-    @classmethod
-    def validate_env(cls, v):
-        allowed = ["development", "staging", "production"]
-        if v not in allowed:
-            raise ValueError(f"app_env harus salah satu dari {allowed}")
-        return v
-
-    @field_validator("log_level")
-    @classmethod
-    def validate_log_level(cls, v):
-        allowed = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-        if v.upper() not in allowed:
-            raise ValueError(f"log_level harus salah satu dari {allowed}")
-        return v.upper()
-
-    model_config = {
-        "env_file": ".env",
-        "env_file_encoding": "utf-8",
-        "case_sensitive": False,
-        "extra": "ignore",
-    }
+    history_days_scan: int = 252      # Data yang diambil untuk scan
 
 
-@lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    """Return cached settings instance."""
-    return Settings()
-
-
-# Shortcut untuk akses mudah
-settings = get_settings()
+settings = Settings()

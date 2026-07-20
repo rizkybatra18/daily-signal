@@ -3,7 +3,7 @@ DAILY SIGNAL — Universe Manager
 Auto-discover dan maintain seluruh universe saham BEI.
 
 ═══════════════════════════════════════════════════════════════════
-AUDIT NOTE (lihat AUDIT_REPORT.md bagian "Universe Manager Audit")
+AUDIT NOTE (lihat AUDIT_REPORT_v2.md bagian "Universe Manager Audit")
 ═══════════════════════════════════════════════════════════════════
 Scraping idx.co.id LANGSUNG (baik via halaman resmi maupun endpoint
 internal seperti /umbraco/Surface/...) TIDAK dipakai sebagai sumber
@@ -23,7 +23,7 @@ Solusi yang dipakai di sini murni via Yahoo Finance (yfinance), yang
 memang ditujukan untuk konsumsi otomatis/publik dan tidak melarang
 akses terprogram wajar:
 
-  1. UNIVERSE SEED — daftar ~700+ ticker BEI aktif yang disusun dari
+  1. UNIVERSE SEED — daftar ~550 ticker BEI aktif yang disusun dari
      pengetahuan umum emiten BEI per sektor (lihat _CURATED_SECTORS).
      Ini BUKAN daftar final yang dipakai mentah — hanya kandidat awal.
   2. VALIDASI — setiap kandidat divalidasi via Yahoo Finance: apakah
@@ -67,7 +67,7 @@ log = get_logger("universe_manager")
 
 # ═══════════════════════════════════════════════════════════════════
 #  CURATED SEED — dikelompokkan per sektor IDX-IC (11 sektor resmi)
-#  ~700+ ticker. Ini KANDIDAT AWAL, bukan universe final — semua
+#  ~550 ticker. Ini KANDIDAT AWAL, bukan universe final — semua
 #  tetap divalidasi likuiditasnya via Yahoo Finance sebelum dipakai.
 # ═══════════════════════════════════════════════════════════════════
 
@@ -85,7 +85,7 @@ _CURATED_SECTORS: dict[str, list[str]] = {
         "ASRM", "LPGI", "MREI", "PNLF", "VINS", "ABDA", "AHAP", "AMAG",
         "ASSA", "JMAS", "MTWI", "PGJO", "PPRO", "BBSI", "BBRM", "OCAP",
         "PEGE", "PLAS", "RELI", "SFAN", "TRIM", "YULE", "APIC", "ARTA",
-        "GSMF", "PADI", "STAR", "VICO", "WICO", "CASA", "ROCK",
+        "GSMF", "STAR", "VICO", "WICO", "CASA", "ROCK",
     ],
 
     "Consumer Non-Cyclicals": [
@@ -94,18 +94,18 @@ _CURATED_SECTORS: dict[str, list[str]] = {
         "AISA", "ALTO", "ADES", "CAMP", "CEKA", "COCO", "DMND", "DSFI",
         "FOOD", "GOOD", "HOKI", "IIKP", "KEJU", "MAIN", "PANI", "PCAR",
         "PSGO", "SKBM", "SKLT", "TBLA", "TGKA", "TAYS", "AALI", "LSIP",
-        "SIMP", "SSMS", "TBLA", "DSNG", "SGRO", "SMAR", "ANJT", "BWPT",
+        "SIMP", "SSMS", "DSNG", "SGRO", "SMAR", "ANJT", "BWPT",
         "GZCO", "JAWA", "SMGA", "PALM", "TAPG", "UNSP", "MGRO", "PNGO",
         "CPRO", "CSAP", "DPUM", "IPPE", "SDPC", "AMFG", "TCID", "MBTO",
         "MRAT", "KINO", "UNIC", "PYFA", "BEEF", "CPDW", "CRAB", "OILS",
-        "TLDN", "WMPP", "WAPO", "FISH", "JAWA", "LAPD", "BUDI", "EPMT",
+        "TLDN", "WMPP", "WAPO", "FISH", "LAPD", "BUDI", "EPMT",
         "AYAM", "CBUT", "DAYA", "ENZO", "FAPA", "GUNA", "SUNI", "UDNG",
         "SOTS",
     ],
 
     "Consumer Cyclicals": [
         "ASII", "MAPI", "ACES", "ERAA", "BUKA", "GOTO", "MNCN", "LPPF",
-        "RALS", "MPPA", "HERO", "AMRT", "MIDI", "CSAP", "SCMA", "MSIN",
+        "RALS", "MPPA", "HERO", "AMRT", "MIDI", "SCMA", "MSIN",
         "MDIA", "FILM", "EMTK", "KPIG", "PANR", "PZZA", "FAST", "MAPB",
         "MAPA", "TRIS", "BATA", "BAYU", "PDES", "PJAA", "PSKT", "SHID",
         "PANS", "HRTA", "CENT", "CLAY", "GLOB", "TRIO", "AUTO", "SMSM",
@@ -134,13 +134,13 @@ _CURATED_SECTORS: dict[str, list[str]] = {
         "ALKA", "ALMI", "ARNA", "BAJA", "BTON", "CTBN", "GDST", "INAI",
         "ISSP", "JKSW", "JPRS", "KIAS", "LION", "LMSH", "MLIA", "PICO",
         "SPMA", "TDPM", "TOTO", "AGII", "BRMS", "CTTH", "DKFT", "FASW",
-        "IFSH", "IPOL", "KDSI", "MOLI", "SULI", "TIRT", "UNSP", "ZINC",
+        "IFSH", "IPOL", "KDSI", "MOLI", "SULI", "TIRT", "ZINC",
         "NICL", "NCKL", "MBMA", "OBMD", "HRTA",
     ],
 
     "Infrastructure": [
         "TLKM", "EXCL", "ISAT", "TOWR", "WEGE", "JSMR", "MTEL", "FREN",
-        "LINK", "BALI", "CENT", "SUPR", "TBIG", "META", "IBST", "GHON",
+        "LINK", "BALI", "SUPR", "TBIG", "META", "IBST", "GHON",
         "OASA", "MORA", "TOTL", "PTPP", "WSKT", "WIKA", "ADHI", "WSBP",
         "NRCA", "PBSA", "IDPR", "ACST", "APII", "SSIA", "PPRE", "DGIK",
         "HOME",
@@ -148,18 +148,18 @@ _CURATED_SECTORS: dict[str, list[str]] = {
 
     "Properties & Real Estate": [
         "BSDE", "CTRA", "PWON", "SMRA", "LPKR", "DMAS", "JRPT", "APLN",
-        "MTLA", "KIJA", "SSIA", "NIRO", "PANI", "PLIN", "RDTX", "RODA",
+        "MTLA", "KIJA", "NIRO", "PANI", "PLIN", "RDTX", "RODA",
         "ASRI", "BAPA", "BCIP", "BEST", "BIKA", "BKDP", "BKSL", "COWL",
         "CPRI", "DUTI", "ELTY", "EMDE", "FMII", "GAMA", "GMTD", "GPRA",
         "GWSA", "INPP", "KOTA", "LCGP", "LPCK", "MDLN", "MKPI", "MMLP",
-        "MPRO", "MTSM", "MYRX", "NZIA", "OMRE", "PPRO", "PUDP", "PWSI",
+        "MPRO", "MTSM", "MYRX", "NZIA", "OMRE", "PUDP", "PWSI",
         "RBMS", "RIMO", "SATU", "SCBD", "SMDM", "TARA", "URBN", "VAST",
         "AMAN", "ATAP", "BOGA", "CBPE",
     ],
 
     "Industrials": [
         "UNTR", "HEXA", "KOBX", "SOCI", "IMPC", "ASGR", "SCCO", "IKBI",
-        "JECC", "KBLI", "KBLM", "CCSI", "KRAH", "VOKS", "IPTV", "GDST",
+        "JECC", "KBLI", "KBLM", "CCSI", "KRAH", "IPTV", "GDST",
         "AMIN", "ARKA", "BEBS", "CBMF", "IKAN", "INCF", "SLIS", "TRAM",
         "TRUK", "WEHA",
     ],
@@ -185,8 +185,9 @@ _CURATED_SECTORS: dict[str, list[str]] = {
     ],
 }
 
-# Flatten ke satu list ".JK" untuk kandidat validasi
+
 def _flatten_curated() -> list[str]:
+    """Flatten ke satu list '.JK' untuk kandidat validasi (dedup)."""
     seen = set()
     flat = []
     for tickers in _CURATED_SECTORS.values():
@@ -216,7 +217,7 @@ def get_all_bei_tickers() -> list[str]:
     Ambil daftar semua ticker aktif di BEI.
 
     Strategy:
-      1. Kandidat = curated seed (~700+) + extra source (jika diset)
+      1. Kandidat = curated seed (~550) + extra source (jika diset)
       2. Validasi kandidat via Yahoo Finance (batch, retry-friendly)
       3. Jika validasi gagal total → fallback ke database (universe
          hasil scan sebelumnya, sudah pasti valid)
@@ -292,7 +293,6 @@ def _fetch_extra_source(url: str) -> list[str]:
         if not text:
             return []
 
-        # Coba parse sebagai CSV dengan header
         if "," in text.splitlines()[0].lower() or "ticker" in text.splitlines()[0].lower():
             try:
                 from io import StringIO
@@ -301,9 +301,8 @@ def _fetch_extra_source(url: str) -> list[str]:
                 if col:
                     return [str(v) for v in df[col].dropna().tolist()]
             except Exception:
-                pass  # Jatuh ke parsing baris-per-baris di bawah
+                pass
 
-        # Fallback: satu ticker per baris
         return [line.strip() for line in text.splitlines() if line.strip()]
 
     except Exception as e:
@@ -323,7 +322,7 @@ def _validate_candidates_via_yahoo(candidates: list[str]) -> list[str]:
     log.info(f"Validating {len(candidates)} ticker via Yahoo Finance...")
     active_tickers: list[str] = []
 
-    batch_size = 75  # cukup besar untuk efisiensi, cukup kecil agar stabil
+    batch_size = 75
     total_batches = (len(candidates) + batch_size - 1) // batch_size
 
     for batch_num, i in enumerate(range(0, len(candidates), batch_size), 1):
@@ -348,7 +347,6 @@ def _validate_candidates_via_yahoo(candidates: list[str]) -> list[str]:
                     continue
                 valid = close_data.columns[close_data.iloc[-1].notna()].tolist()
             else:
-                # Hanya 1 ticker di batch ini
                 valid = batch[:1] if not data["Close"].dropna().empty else []
 
             active_tickers.extend(valid)
@@ -357,7 +355,6 @@ def _validate_candidates_via_yahoo(candidates: list[str]) -> list[str]:
             log.warning(f"Batch validasi {batch_num}/{total_batches} error: {e}")
             continue
 
-        # Rate limiting sopan ke Yahoo Finance
         time.sleep(0.5)
 
     return active_tickers
@@ -409,7 +406,6 @@ def refresh_universe() -> dict:
     new_tickers = fresh_set - db_set
     possibly_delisted = db_set - fresh_set
 
-    # ── Safety guard terhadap false-mass-delisting ──────────────
     skip_delisting_check = False
     if db_set:
         retained_ratio = len(fresh_set & db_set) / len(db_set)
@@ -422,7 +418,6 @@ def refresh_universe() -> dict:
             )
             skip_delisting_check = True
 
-    # ── Tambah ticker baru ────────────────────────────────────────
     added = 0
     for ticker in new_tickers:
         ticker_clean = ticker.replace(".JK", "")
@@ -439,7 +434,6 @@ def refresh_universe() -> dict:
             added += 1
             log.info(f"✓ Saham baru ditambahkan: {ticker} ({sector})")
 
-    # ── Tandai delisting (hanya jika safety guard tidak aktif) ────
     removed = 0
     if not skip_delisting_check:
         for ticker in possibly_delisted:
@@ -457,7 +451,6 @@ def refresh_universe() -> dict:
                 except Exception as e:
                     log.error(f"Gagal update delisting {ticker}: {e}")
 
-    # Update nama dan info dari Yahoo Finance (batch kecil per run)
     _update_stock_info(fresh_tickers[:30])
 
     result = {
@@ -495,10 +488,10 @@ def _verify_delisting(ticker: str) -> bool:
                 if attempt == 0:
                     time.sleep(2)
                     continue
-                return True  # Tidak ada data 2x percobaan = kemungkinan delisting
+                return True
 
             if df["Volume"].sum() == 0:
-                return True  # Ada data tapi tidak ada transaksi = suspended/delisted
+                return True
 
             return False
 
@@ -506,7 +499,7 @@ def _verify_delisting(ticker: str) -> bool:
             if attempt == 0:
                 time.sleep(2)
                 continue
-            return False  # Error jaringan → jangan tandai delisting (aman by default)
+            return False
 
     return False
 
@@ -552,6 +545,5 @@ def get_tickers_by_sector(sector: str) -> list[str]:
     except Exception:
         pass
 
-    # Fallback ke curated sector map
     tickers = _CURATED_SECTORS.get(sector, [])
     return [f"{t}.JK" for t in tickers]

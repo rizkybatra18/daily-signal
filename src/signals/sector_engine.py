@@ -1,9 +1,11 @@
 """
 DAILY SIGNAL — Sector Rotation Engine
-Rank sektor BEI berdasarkan momentum dan performa.
-Digunakan untuk meningkatkan kualitas sinyal:
-  - Saham dari sektor top-3 mendapat bonus score
-  - Saham dari sektor bottom-3 mendapat penalty
+Analisis performa sektor untuk sector bonus/penalty scoring.
+
+Menghitung ranking sektor berdasarkan:
+    - Return 5 hari, 20 hari
+    - Momentum relatif antar sektor
+    - Breadth per sektor (% saham naik dalam sektor)
 """
 
 import pandas as pd
@@ -17,20 +19,20 @@ from src.core.database import save_sector_rankings, get_db
 
 log = get_logger("sector_engine")
 
-# Sektor BEI
-BEI_SECTORS = [
-    "Financials",
-    "Consumer Non-Cyclicals",
-    "Consumer Cyclicals",
-    "Energy",
-    "Basic Materials",
-    "Technology",
-    "Healthcare",
-    "Industrials",
-    "Infrastructure",
-    "Properties & Real Estate",
-    "Transportation & Logistics",
-]
+
+@dataclass
+class SectorRanking:
+    sector: str
+    rank: int
+    return_1d: float = 0.0
+    return_5d: float = 0.0
+    return_20d: float = 0.0
+    momentum_score: float = 0.0
+    breadth_pct: float = 50.0
+    composite_score: float = 50.0
+    trend: str = "STABLE"          # RISING/STABLE/FALLING
+    score_bonus: float = 0.0       # -5 sampai +5, diterapkan ke saham di sektor ini
+
 
 # Sektor ETF/proxy tickers untuk hitung sektor return
 #
@@ -80,134 +82,130 @@ def _build_sector_proxy() -> dict[str, list[str]]:
 SECTOR_PROXY = _build_sector_proxy()
 
 
-@dataclass
-class SectorRanking:
-    sector: str
-    return_1d: float = 0.0
-    return_5d: float = 0.0
-    return_20d: float = 0.0
-    momentum_score: float = 0.0
-    breadth_score: float = 0.0    # % saham di sektor yang naik
-    composite_score: float = 0.0
-    rank: int = 0
-    trend: str = "STABLE"         # RISING/STABLE/FALLING
-    score_bonus: float = 0.0      # Bonus/penalty untuk sinyal di sektor ini
-
-
-def calculate_sector_rankings(
-    stock_data: dict[str, pd.DataFrame],  # {ticker: df_ohlcv}
-) -> list[SectorRanking]:
+def calculate_sector_rankings(stock_data: dict[str, pd.DataFrame]) -> list[SectorRanking]:
     """
-    Hitung ranking sektor dari data harga saham.
-    
+    Hitung ranking performa sektor berdasarkan data saham yang sudah dimuat.
+
     Args:
-        stock_data: Dictionary {ticker: OHLCV DataFrame}
-    
+        stock_data: dict {ticker: DataFrame OHLCV} — data yang SAMA
+            yang dipakai untuk analisis TA per saham (tidak ada query
+            tambahan ke provider/DB).
+
     Returns:
-        List SectorRanking diurutkan dari terbaik
+        list[SectorRanking] terurut dari terbaik ke terburuk
     """
     log.info("Menghitung sektor rotation rankings...")
-    
-    sector_results = []
-    
+
+    sector_stats = []
+
     for sector, proxy_tickers in SECTOR_PROXY.items():
-        available_tickers = [t for t in proxy_tickers if t in stock_data]
-        
-        if not available_tickers:
+        available = [t for t in proxy_tickers if t in stock_data]
+
+        if not available:
             log.warning(f"Tidak ada data untuk sektor {sector}")
-            sector_results.append(SectorRanking(
-                sector=sector,
-                composite_score=0.0,
-                trend="STABLE",
-            ))
             continue
-        
-        # Kumpulkan returns per saham di sektor
+
         returns_1d = []
         returns_5d = []
         returns_20d = []
-        
-        for ticker in available_tickers:
+        advance = 0
+        decline = 0
+
+        for ticker in available:
             df = stock_data[ticker]
-            if df is None or len(df) < 5:
+            if df is None or df.empty or len(df) < 2:
                 continue
-            
+
             close = df["close"]
             last = float(close.iloc[-1])
-            
+
             if len(close) >= 2:
-                r1d = ((last / float(close.iloc[-2])) - 1) * 100
+                prev = float(close.iloc[-2])
+                r1d = ((last / prev) - 1) * 100 if prev > 0 else 0
                 returns_1d.append(r1d)
-            
+                if r1d > 0:
+                    advance += 1
+                elif r1d < 0:
+                    decline += 1
+
             if len(close) >= 6:
-                r5d = ((last / float(close.iloc[-6])) - 1) * 100
+                base5 = float(close.iloc[-6])
+                r5d = ((last / base5) - 1) * 100 if base5 > 0 else 0
                 returns_5d.append(r5d)
-            
+
             if len(close) >= 21:
-                r20d = ((last / float(close.iloc[-21])) - 1) * 100
+                base20 = float(close.iloc[-21])
+                r20d = ((last / base20) - 1) * 100 if base20 > 0 else 0
                 returns_20d.append(r20d)
-        
+
         if not returns_1d:
-            sector_results.append(SectorRanking(sector=sector))
             continue
-        
-        # Average return per sektor
-        avg_1d = float(np.mean(returns_1d)) if returns_1d else 0.0
+
+        avg_1d = float(np.mean(returns_1d))
         avg_5d = float(np.mean(returns_5d)) if returns_5d else 0.0
         avg_20d = float(np.mean(returns_20d)) if returns_20d else 0.0
-        
-        # Breadth: % saham yang naik
-        breadth = sum(1 for r in returns_1d if r > 0) / len(returns_1d) * 100 if returns_1d else 50.0
-        
-        # Momentum Score (0-100)
-        # Weighted: recent lebih penting
-        momentum = (avg_1d * 5) + (avg_5d * 2) + (avg_20d * 0.5)
-        momentum_score = max(0, min(100, 50 + momentum * 5))  # Normalize ke 0-100
-        
-        # Composite Score
-        composite = (momentum_score * 0.6) + (breadth * 0.4)
-        
-        # Trend
-        if avg_5d > 2.0 and avg_20d > 0:
+
+        total_stocks = advance + decline
+        breadth_pct = (advance / total_stocks * 100) if total_stocks > 0 else 50.0
+
+        momentum_score = (avg_5d * 0.6) + (avg_20d * 0.4)
+
+        composite = 50 + (momentum_score * 3) + ((breadth_pct - 50) * 0.3)
+        composite = max(0, min(100, composite))
+
+        if momentum_score > 1.5:
             trend = "RISING"
-        elif avg_5d < -2.0:
+        elif momentum_score < -1.5:
             trend = "FALLING"
         else:
             trend = "STABLE"
-        
-        sector_results.append(SectorRanking(
-            sector=sector,
-            return_1d=round(avg_1d, 2),
-            return_5d=round(avg_5d, 2),
-            return_20d=round(avg_20d, 2),
-            momentum_score=round(momentum_score, 1),
-            breadth_score=round(breadth, 1),
-            composite_score=round(composite, 1),
-            trend=trend,
-        ))
-    
-    # Sort by composite score
-    sector_results.sort(key=lambda x: x.composite_score, reverse=True)
-    
-    # Assign ranks dan bonuses
-    n = len(sector_results)
-    for i, sr in enumerate(sector_results):
-        sr.rank = i + 1
-        
-        # Score bonus untuk sinyal di sektor ini
-        if i < 3:          # Top 3 sektor
-            sr.score_bonus = 5.0    # +5 poin bonus
-        elif i >= n - 3:   # Bottom 3 sektor
-            sr.score_bonus = -5.0   # -5 poin penalty
+
+        sector_stats.append({
+            "sector": sector,
+            "return_1d": round(avg_1d, 2),
+            "return_5d": round(avg_5d, 2),
+            "return_20d": round(avg_20d, 2),
+            "momentum_score": round(momentum_score, 2),
+            "breadth_pct": round(breadth_pct, 1),
+            "composite_score": round(composite, 1),
+            "trend": trend,
+        })
+
+    sector_stats.sort(key=lambda x: x["composite_score"], reverse=True)
+
+    n = len(sector_stats)
+    rankings = []
+
+    for i, stat in enumerate(sector_stats, 1):
+        if n <= 1:
+            bonus = 0.0
+        elif i <= max(1, n // 3):
+            bonus = 5.0
+        elif i > n - max(1, n // 3):
+            bonus = -5.0
         else:
-            sr.score_bonus = 0.0
-    
-    # Simpan ke database
-    _save_sector_rankings(sector_results)
-    
-    log.info(f"Sector rankings dihitung: #{1} {sector_results[0].sector} ({sector_results[0].composite_score:.1f})")
-    
-    return sector_results
+            bonus = 0.0
+
+        rankings.append(SectorRanking(
+            sector=stat["sector"],
+            rank=i,
+            return_1d=stat["return_1d"],
+            return_5d=stat["return_5d"],
+            return_20d=stat["return_20d"],
+            momentum_score=stat["momentum_score"],
+            breadth_pct=stat["breadth_pct"],
+            composite_score=stat["composite_score"],
+            trend=stat["trend"],
+            score_bonus=bonus,
+        ))
+
+    _save_rankings_to_db(rankings)
+
+    if rankings:
+        top = rankings[0]
+        log.info(f"Sector rankings dihitung: #1 {top.sector} ({top.composite_score})")
+
+    return rankings
 
 
 def get_sector_bonus(ticker: str, sector_rankings: list[SectorRanking]) -> float:
@@ -216,46 +214,45 @@ def get_sector_bonus(ticker: str, sector_rankings: list[SectorRanking]) -> float
     Return float: positif = bonus, negatif = penalty, 0 = neutral
     """
     from src.providers.universe_manager import TICKER_SECTOR
-    
+
     ticker_clean = ticker.replace(".JK", "")
     sector = TICKER_SECTOR.get(ticker_clean)
-    
+
     if not sector:
         return 0.0
-    
+
     for sr in sector_rankings:
         if sr.sector == sector:
             return sr.score_bonus
-    
+
     return 0.0
 
 
-def _save_sector_rankings(rankings: list[SectorRanking]):
-    """Simpan rankings ke database."""
+def _save_rankings_to_db(rankings: list[SectorRanking]):
+    """Simpan sector rankings ke database (best-effort)."""
     try:
-        today = date.today().isoformat()
         records = [
             {
-                "rank_date": today,
-                "sector": sr.sector,
-                "return_1d": sr.return_1d,
-                "return_5d": sr.return_5d,
-                "return_20d": sr.return_20d,
-                "momentum_score": sr.momentum_score,
-                "breadth_score": sr.breadth_score,
-                "composite_score": sr.composite_score,
-                "rank_position": sr.rank,
-                "trend": sr.trend,
+                "rank_date": date.today().isoformat(),
+                "sector": r.sector,
+                "rank_position": r.rank,
+                "return_1d": r.return_1d,
+                "return_5d": r.return_5d,
+                "return_20d": r.return_20d,
+                "momentum_score": r.momentum_score,
+                "breadth_score": r.breadth_pct,
+                "composite_score": r.composite_score,
+                "trend": r.trend,
             }
-            for sr in rankings
+            for r in rankings
         ]
         save_sector_rankings(records)
     except Exception as e:
-        log.error(f"Gagal simpan sector rankings: {e}")
+        log.debug(f"Gagal simpan sector rankings: {e}")
 
 
 def get_latest_sector_rankings() -> list[dict]:
-    """Ambil sector rankings terbaru dari database."""
+    """Ambil ranking sektor terbaru dari database (untuk dashboard/telegram)."""
     try:
         db = get_db()
         result = (
@@ -263,7 +260,7 @@ def get_latest_sector_rankings() -> list[dict]:
             .select("*")
             .order("rank_date", desc=True)
             .order("rank_position")
-            .limit(20)
+            .limit(11)
             .execute()
         )
         return result.data or []

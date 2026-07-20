@@ -6,7 +6,7 @@ Menentukan bobot scoring (regime_weight) untuk semua sinyal.
 Metodologi:
     1. Trend IHSG vs EMA20, EMA50
     2. RSI IHSG (momentum)
-    3. Market Breadth (Advance-Decline ratio)
+    3. Market Breadth (Advance-Decline ratio + % saham di atas EMA20/50/200)
     4. Short-term change (5 hari)
     5. ADX IHSG (kekuatan trend)
 
@@ -33,7 +33,7 @@ log = get_logger("regime_engine")
 @dataclass
 class MarketRegime:
     regime: str = "SIDEWAYS"       # BULL / SIDEWAYS / BEAR
-    regime_weight: float = 0.75    # Multiplier untuk scoring
+    regime_weight: float = 0.75    # Multiplier untuk scoring (display)
     ihsg_close: float = 0.0
     ihsg_ema20: float = 0.0
     ihsg_ema50: float = 0.0
@@ -53,15 +53,12 @@ class MarketRegime:
     pct_above_ema50: float = 50.0
     pct_above_ema200: float = 50.0
     regime_reason: str = ""
-    
+
     # Signal modifier berdasarkan regime
-    # BULL: sinyal BUY normal, SELL dikurangi
-    # SIDEWAYS: semua sinyal dikurangi 25%
-    # BEAR: semua sinyal BUY di-suppress, SL lebih ketat
     signal_modifier: str = "NORMAL"
 
 
-def compute_market_breadth(stock_data: dict[str, "pd.DataFrame"]) -> dict:
+def compute_market_breadth(stock_data: dict) -> dict:
     """
     Hitung Market Breadth NYATA dari data harga yang sudah dimuat scanner.
     Tidak butuh API/data tambahan — memanfaatkan stock_data yang sama
@@ -105,7 +102,6 @@ def compute_market_breadth(stock_data: dict[str, "pd.DataFrame"]) -> dict:
         elif last < prev:
             decline += 1
 
-        # EMA20 partisipasi (butuh minimal 20 baris)
         if len(df) >= 20:
             ema20 = close.ewm(span=20, adjust=False, min_periods=20).mean().iloc[-1]
             if pd.notna(ema20):
@@ -138,15 +134,15 @@ def compute_market_breadth(stock_data: dict[str, "pd.DataFrame"]) -> dict:
 
 def detect_market_regime(
     ihsg_df: pd.DataFrame,
-    breadth_data: Optional[dict] = None,  # {"advance": int, "decline": int}
+    breadth_data: Optional[dict] = None,  # {"advance": int, "decline": int, "pct_above_emaXX": float}
 ) -> MarketRegime:
     """
     Deteksi regime pasar saat ini.
-    
+
     Args:
         ihsg_df: DataFrame OHLCV IHSG (minimal 50 baris)
-        breadth_data: Optional breadth data (advance/decline counts)
-    
+        breadth_data: Optional breadth data dari compute_market_breadth()
+
     Returns:
         MarketRegime object
     """
@@ -157,17 +153,15 @@ def detect_market_regime(
             regime_weight=0.75,
             regime_reason="Data IHSG tidak cukup — default SIDEWAYS",
         )
-    
+
     try:
         close = ihsg_df["close"]
-        
-        # Indikator IHSG
+
         ema20 = calc_ema(close, 20)
         ema50 = calc_ema(close, 50)
         rsi = calc_rsi(close, 14)
         adx, plus_di, minus_di = calc_adx(ihsg_df, 14)
-        
-        # Nilai terbaru
+
         last_close = float(close.iloc[-1])
         last_ema20 = float(ema20.iloc[-1])
         last_ema50 = float(ema50.iloc[-1]) if len(ema50.dropna()) > 0 else last_ema20
@@ -175,25 +169,24 @@ def detect_market_regime(
         last_adx = float(adx.iloc[-1]) if not adx.empty else 20.0
         last_plus_di = float(plus_di.iloc[-1]) if not plus_di.empty else 0.0
         last_minus_di = float(minus_di.iloc[-1]) if not minus_di.empty else 0.0
-        
-        # Changes
+
         change_1d = 0.0
         change_5d = 0.0
         change_20d = 0.0
-        
+
         if len(close) >= 2:
             change_1d = ((last_close / float(close.iloc[-2])) - 1) * 100
         if len(close) >= 6:
             change_5d = ((last_close / float(close.iloc[-6])) - 1) * 100
         if len(close) >= 21:
             change_20d = ((last_close / float(close.iloc[-21])) - 1) * 100
-        
+
         # ── Scoring Components ────────────────────────────────
-        
+
         bull_signals = 0
         bear_signals = 0
         reasons = []
-        
+
         # 1. Price vs EMA20
         if last_close > last_ema20:
             bull_signals += 2
@@ -201,7 +194,7 @@ def detect_market_regime(
         else:
             bear_signals += 2
             reasons.append(f"IHSG di bawah EMA20 ({last_ema20:,.0f})")
-        
+
         # 2. Price vs EMA50
         if last_close > last_ema50:
             bull_signals += 1
@@ -209,7 +202,7 @@ def detect_market_regime(
         else:
             bear_signals += 1
             reasons.append("IHSG di bawah EMA50")
-        
+
         # 3. RSI
         if last_rsi > 55:
             bull_signals += 2
@@ -219,7 +212,7 @@ def detect_market_regime(
             reasons.append(f"RSI bearish ({last_rsi:.1f})")
         else:
             reasons.append(f"RSI neutral ({last_rsi:.1f})")
-        
+
         # 4. 5-day momentum
         if change_5d > 1.0:
             bull_signals += 2
@@ -230,7 +223,7 @@ def detect_market_regime(
         elif change_5d < -1.5:
             bear_signals += 1
             reasons.append(f"5D melemah ({change_5d:+.1f}%)")
-        
+
         # 5. ADX trend direction
         if last_adx > 25 and last_plus_di > last_minus_di:
             bull_signals += 2
@@ -238,7 +231,7 @@ def detect_market_regime(
         elif last_adx > 25 and last_minus_di > last_plus_di:
             bear_signals += 2
             reasons.append(f"Trend turun kuat ADX={last_adx:.1f}")
-        
+
         # 6. Breadth (advance-decline + partisipasi EMA)
         advance_count = 0
         decline_count = 0
@@ -253,7 +246,7 @@ def detect_market_regime(
             decline_count = breadth_data.get("decline", 0)
             total = advance_count + decline_count
             if total > 0:
-                ad_ratio = advance_count / (decline_count + 1)  # Avoid div by 0
+                ad_ratio = advance_count / (decline_count + 1)
                 breadth_score = (advance_count / total) * 100
 
                 if breadth_score > settings.breadth_bullish_pct:
@@ -263,10 +256,6 @@ def detect_market_regime(
                     bear_signals += 2
                     reasons.append(f"Breadth bearish ({breadth_score:.0f}% saham naik)")
 
-            # Partisipasi EMA20 — lebih dalam dari sekadar breadth harian,
-            # menangkap apakah kenaikan pasar didukung banyak saham atau
-            # hanya segelintir saham kapitalisasi besar (indeks bisa naik
-            # meski partisipasi sempit — ini menangkap kondisi itu).
             if "pct_above_ema20" in breadth_data:
                 pct_above_ema20 = breadth_data["pct_above_ema20"]
                 pct_above_ema50 = breadth_data.get("pct_above_ema50", 50.0)
@@ -278,24 +267,23 @@ def detect_market_regime(
                 elif pct_above_ema50 < 40:
                     bear_signals += 1
                     reasons.append(f"Hanya {pct_above_ema50:.0f}% saham di atas EMA50")
-        
+
         # ── Determine Regime ─────────────────────────────────
-        
+
         total_signals = bull_signals + bear_signals
         bull_ratio = bull_signals / total_signals if total_signals > 0 else 0.5
-        
-        # Extreme conditions override
+
         extreme_bear = (
             change_5d < -5.0 or
             last_rsi < 30 or
             (last_close < last_ema20 and last_close < last_ema50 and change_5d < -2)
         )
-        
+
         extreme_bull = (
             change_5d > 3.0 or
             (last_close > last_ema20 and last_close > last_ema50 and last_rsi > 60)
         )
-        
+
         if extreme_bear or bull_ratio < 0.3:
             regime = "BEAR"
             regime_weight = 0.4
@@ -308,9 +296,9 @@ def detect_market_regime(
             regime = "SIDEWAYS"
             regime_weight = 0.75
             signal_modifier = "SELECTIVE"
-        
+
         regime_reason = f"Bull:{bull_signals} Bear:{bear_signals} | " + " | ".join(reasons[:3])
-        
+
         result = MarketRegime(
             regime=regime,
             regime_weight=regime_weight,
@@ -332,18 +320,17 @@ def detect_market_regime(
             regime_reason=regime_reason,
             signal_modifier=signal_modifier,
         )
-        
-        # Simpan ke database
+
         _save_regime_to_db(result)
-        
+
         log.info(
             f"Market Regime: {regime} (weight={regime_weight}) | "
             f"IHSG={last_close:,.0f} | RSI={last_rsi:.1f} | 5D={change_5d:+.1f}% | "
             f"Breadth: {breadth_score:.0f}% naik, {pct_above_ema50:.0f}% di atas EMA50"
         )
-        
+
         return result
-        
+
     except Exception as e:
         log.error(f"Deteksi regime gagal: {e}", exc=e)
         return MarketRegime(
@@ -398,7 +385,7 @@ def get_latest_regime() -> Optional[MarketRegime]:
         )
         if not result.data:
             return None
-        
+
         row = result.data[0]
         return MarketRegime(
             regime=row["regime"],
