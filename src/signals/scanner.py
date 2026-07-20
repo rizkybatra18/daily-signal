@@ -310,9 +310,9 @@ def _load_batch_from_db(
                     .gte("trade_date", start_date)
                     .order("trade_date")
                     .execute()
-                    log.info(f"[DEBUG] len(res.data) = {len(res.data) if res.data else 0}")
-                    log.info(f"[DEBUG] first row = {res.data[0] if res.data else None}")
                 )
+                log.info(f"[DEBUG] len(res.data) = {len(res.data) if res.data else 0}")
+                log.info(f"[DEBUG] first row = {res.data[0] if res.data else None}")
                 log.info(f"[DEBUG] Batch {i//batch_size+1}: returned {len(res.data or [])} rows")
                 all_rows.extend(res.data or [])
                 _time.sleep(0.3)   # jeda antar batch
