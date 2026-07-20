@@ -368,7 +368,13 @@ def _analyze_all_parallel(
     total = len(stock_data)
     completed = 0
     
+    none_count = 0
+    none_samples = []
+    exc_count = 0
+    exc_samples = []
+
     def analyze_one(ticker_df_pair):
+        nonlocal none_count, exc_count
         ticker, df = ticker_df_pair
         try:
             sector_bonus = get_sector_bonus(ticker, sector_rankings)
@@ -382,35 +388,33 @@ def _analyze_all_parallel(
                 sector_bonus=sector_bonus,
             )
             if analysis is None:
+                none_count += 1
+                if len(none_samples) < 8:
+                    rows = len(df) if df is not None else 0
+                    none_samples.append(f"{ticker}(rows={rows})")
                 return None
-            
+
             analysis = apply_basic_filters(analysis)
             return analysis
         except Exception as e:
-            log.debug(f"Analisis gagal {ticker}: {e}")
+            exc_count += 1
+            if len(exc_samples) < 8:
+                exc_samples.append(f"{ticker}: {type(e).__name__}: {e}")
             return None
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(analyze_one, item): item[0]
-            for item in stock_data.items()
-        }
-        
-        for future in concurrent.futures.as_completed(futures):
-            ticker = futures[future]
-            completed += 1
-            
-            try:
-                result = future.result()
-                if result is not None:
-                    results.append(result)
-            except Exception as e:
-                log.debug(f"Analisis error {ticker}: {e}")
-            
-            if completed % 50 == 0:
-                log.info(f"  Progress: {completed}/{total} saham dianalisis...")
-    
     log.info(f"Analisis selesai: {len(results)}/{total} berhasil")
+
+    if none_count > 0:
+        log.warning(
+            f"⚠ {none_count}/{total} saham di-skip (analyze_stock return None — "
+            f"biasanya data < 30 baris). Contoh: {'; '.join(none_samples)}"
+        )
+    if exc_count > 0:
+        log.error(
+            f"❌ {exc_count}/{total} saham GAGAL karena exception. "
+            f"Contoh: {'; '.join(exc_samples)}"
+        )
+
     return results
 
 
