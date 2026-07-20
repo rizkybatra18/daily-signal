@@ -43,9 +43,6 @@ def health_check() -> dict:
     start = time.time()
     try:
         db = get_db()
-        # Coba query ke tabel stocks (lebih aman dari system_logs karena tidak butuh data)
-        # count=exact menghindari error PGRST125 (invalid path) yang muncul
-        # jika tabel kosong dan kita pakai select("id")
         result = db.table("stocks").select("ticker", count="exact").limit(1).execute()
         latency_ms = int((time.time() - start) * 1000)
         return {
@@ -57,7 +54,6 @@ def health_check() -> dict:
         err_str = str(e)
         latency_ms = int((time.time() - start) * 1000)
 
-        # Diagnosis lebih spesifik untuk error umum
         if "PGRST125" in err_str or "Invalid path" in err_str:
             hint = "Kemungkinan migration SQL belum dijalankan di Supabase. Buka SQL Editor Supabase dan jalankan migrations/001_initial_schema.sql"
         elif "Invalid API key" in err_str or "401" in err_str:
@@ -121,7 +117,6 @@ def upsert_stock(ticker: str, data: dict) -> bool:
         return False
 
 
-
 def ensure_stocks_registered(tickers: list[str]) -> int:
     """
     Pastikan semua ticker terdaftar di tabel stocks sebelum insert prices.
@@ -133,7 +128,6 @@ def ensure_stocks_registered(tickers: list[str]) -> int:
         return 0
     try:
         db = get_db()
-        # Query dalam batch kecil untuk hindari timeout Supabase nano
         existing = set()
         batch_size = 50
         for i in range(0, len(tickers), batch_size):
@@ -141,15 +135,14 @@ def ensure_stocks_registered(tickers: list[str]) -> int:
             try:
                 result = db.table("stocks").select("ticker").in_("ticker", batch).execute()
                 existing.update(r["ticker"] for r in (result.data or []))
-                _time.sleep(0.1)  # Jeda kecil antar query
+                _time.sleep(0.1)
             except Exception:
-                pass  # Skip batch ini, akan dicoba saat insert
+                pass
 
         missing = [t for t in tickers if t not in existing]
         if not missing:
             return 0
 
-        # Insert batch kecil dengan jeda
         records = [
             {
                 "ticker":       t,
@@ -167,9 +160,9 @@ def ensure_stocks_registered(tickers: list[str]) -> int:
                     records[i:i+50], on_conflict="ticker"
                 ).execute()
                 inserted += len(records[i:i+50])
-                _time.sleep(0.2)  # Jeda antar batch untuk Supabase nano
-            except Exception as e2:
-                pass  # Log tapi lanjut
+                _time.sleep(0.2)
+            except Exception:
+                pass
 
         from src.core.logger import get_logger
         log = get_logger("database")
@@ -181,6 +174,7 @@ def ensure_stocks_registered(tickers: list[str]) -> int:
         log = get_logger("database")
         log.error(f"ensure_stocks_registered gagal: {e}")
         return 0
+
 
 def get_last_price_date(ticker: str) -> Optional[str]:
     """
@@ -204,6 +198,64 @@ def get_last_price_date(ticker: str) -> Optional[str]:
         return None
 
 
+def get_price_row_count(ticker: str) -> int:
+    """
+    Hitung jumlah baris histori harga yang sudah tersimpan untuk 1 ticker.
+    Dipertahankan untuk backward-compat — untuk update_ticker(), pakai
+    get_ticker_price_status() (1 query gabungan) alih-alih dua panggilan
+    terpisah (get_last_price_date + get_price_row_count) demi mengurangi
+    beban koneksi paralel ke Supabase nano.
+    """
+    try:
+        db = get_db()
+        result = (
+            db.table("daily_prices")
+            .select("trade_date", count="exact")
+            .eq("ticker", ticker)
+            .execute()
+        )
+        return result.count or 0
+    except Exception:
+        return 0
+
+
+def get_ticker_price_status(ticker: str) -> tuple[Optional[str], int]:
+    """
+    Dapatkan last_date DAN row_count sekaligus dalam SATU query.
+
+    AUDIT FIX (insiden "500 saham tetap rows=17 walau healing sudah aktif"):
+    versi sebelumnya melakukan 2 query terpisah (get_last_price_date lalu
+    get_price_row_count) per ticker. Dengan 514 ticker × 2 query paralel
+    di bawah ThreadPoolExecutor yang berbagi 1 Supabase client instance,
+    ditemukan hasil yang tidak konsisten untuk sebagian besar ticker
+    (row_count computed salah/tinggi padahal data asli cuma 17 baris) —
+    kelas bug yang sama dengan insiden ConnectionTerminated sebelumnya
+    di sistem ini (Supabase nano sensitif terhadap request paralel).
+
+    PostgREST bisa mengembalikan COUNT TOTAL (lewat header Content-Range)
+    BERSAMAAN dengan data yang di-limit — jadi last_date dan row_count
+    bisa didapat dari SATU request, bukan dua, menghilangkan celah
+    inkonsistensi sekaligus mengurangi beban koneksi jadi setengahnya.
+
+    Return: (last_date_iso_atau_None, row_count)
+    """
+    try:
+        db = get_db()
+        result = (
+            db.table("daily_prices")
+            .select("trade_date", count="exact")
+            .eq("ticker", ticker)
+            .order("trade_date", desc=True)
+            .limit(1)
+            .execute()
+        )
+        last_date = result.data[0]["trade_date"] if result.data else None
+        row_count = result.count if result.count is not None else 0
+        return last_date, row_count
+    except Exception:
+        return None, 0
+
+
 def bulk_insert_prices(records: list[dict]) -> int:
     """
     Bulk insert harga harian dengan batch kecil + retry.
@@ -215,11 +267,10 @@ def bulk_insert_prices(records: list[dict]) -> int:
 
     db = get_db()
     total_inserted = 0
-    batch_size = 100  # Kecil agar tidak overload Supabase nano
+    batch_size = 100
 
     for i in range(0, len(records), batch_size):
         batch = records[i:i + batch_size]
-        # Retry 3x per batch
         for attempt in range(3):
             try:
                 db.table("daily_prices").upsert(
@@ -227,7 +278,7 @@ def bulk_insert_prices(records: list[dict]) -> int:
                     on_conflict="ticker,trade_date"
                 ).execute()
                 total_inserted += len(batch)
-                _time.sleep(0.1)  # Jeda kecil antar batch
+                _time.sleep(0.1)
                 break
             except Exception as e:
                 err_str = str(e)
@@ -235,7 +286,6 @@ def bulk_insert_prices(records: list[dict]) -> int:
                     wait = (attempt + 1) * 1.0
                     _time.sleep(wait)
                     continue
-                # Attempt terakhir gagal - log tapi jangan crash
                 from src.core.logger import get_logger
                 log = get_logger("database")
                 log.error(f"Gagal bulk insert prices: {err_str[:200]}")
@@ -248,31 +298,17 @@ def _upsert_with_schema_fallback(
     table: str,
     data: dict,
     on_conflict: Optional[str] = None,
-    known_extra_columns: Optional[list[str]] = None,
 ) -> tuple[bool, Optional[dict]]:
     """
     Upsert/insert dengan fallback otomatis jika ada kolom yang belum
     ada di schema Supabase (PGRST204 "column not found in schema cache").
-
-    AUDIT NOTE (Error Handling): Insiden produksi sebelumnya menunjukkan
-    bahwa satu field tak dikenal di payload membuat SELURUH insert gagal
-    (mis. seluruh 87 sinyal gagal tersimpan karena 1 kolom `analysis_date`
-    yang tidak ada di schema). Helper ini mencegah kejadian serupa: jika
-    error menyebut kolom yang memang termasuk fitur BARU (belum tentu
-    migration sudah dijalankan user), kolom itu dibuang dan insert
-    dicoba ulang SEKALI dengan payload yang sudah dibersihkan — sinyal
-    inti tetap tersimpan meski fitur baru (mis. confidence, factor
-    contribution) untuk sementara tidak tersimpan sampai migration
-    dijalankan.
-
-    Return: (success, result_data_or_None)
     """
     import re as _re
 
     db = get_db()
     payload = dict(data)
 
-    for _ in range(2):  # max 1 retry setelah strip kolom bermasalah
+    for _ in range(2):
         try:
             if on_conflict:
                 res = db.table(table).upsert(payload, on_conflict=on_conflict).execute()
@@ -283,8 +319,6 @@ def _upsert_with_schema_fallback(
         except Exception as e:
             err_str = str(e)
             if "PGRST204" in err_str or "could not find" in err_str.lower():
-                # Ekstrak nama kolom dari pesan error Supabase, contoh:
-                # "Could not find the 'analysis_date' column of 'signals'"
                 match = _re.search(r"'([a-zA-Z_][a-zA-Z0-9_]*)' column", err_str)
                 bad_col = match.group(1) if match else None
 
@@ -297,7 +331,7 @@ def _upsert_with_schema_fallback(
                         f"dilewati untuk kali ini — data lain tetap disimpan."
                     )
                     del payload[bad_col]
-                    continue  # Coba lagi tanpa kolom bermasalah
+                    continue
 
             from src.core.logger import get_logger
             log = get_logger("database")
