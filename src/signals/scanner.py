@@ -311,6 +311,7 @@ def _load_batch_from_db(
                     .order("trade_date")
                     .execute()
                 )
+                log.info(f"[DEBUG] Batch {i//batch_size+1}: returned {len(res.data or [])} rows")
                 all_rows.extend(res.data or [])
                 _time.sleep(0.3)   # jeda antar batch
                 break
