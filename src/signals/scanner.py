@@ -306,7 +306,7 @@ def _load_batch_from_db(
                 res = (
                     db.table("daily_prices")
                     .select("ticker, trade_date, open, high, low, close, volume")
-                    .in_("ticker", batch)
+                    .in_("ticker", "AGRO.JK")
                     .gte("trade_date", start_date)
                     .order("trade_date")
                     .execute()
