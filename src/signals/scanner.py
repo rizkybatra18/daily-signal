@@ -300,6 +300,8 @@ def _load_batch_from_db(
 
     for i in range(0, len(tickers), batch_size):
         batch = tickers[i:i + batch_size]
+        log.info(f"[DEBUG] Batch {i//batch_size+1} request first = {batch[0]}")
+        log.info(f"[DEBUG] Batch {i//batch_size+1} request last  = {batch[-1]}")
         for attempt in range(3):
             try:
                 db = get_db()
