@@ -313,6 +313,7 @@ def _load_batch_from_db(
                     .range(0, 100000)
                     .execute()
                 )
+                log.info(f"[DEBUG] res.count = {getattr(res, 'count', None)}")
                 log.info(f"[DEBUG] len(res.data) = {len(res.data) if res.data else 0}")
                 log.info(f"[DEBUG] first row = {res.data[0] if res.data else None}")
                 log.info(f"[DEBUG] Batch {i//batch_size+1}: returned {len(res.data or [])} rows")
