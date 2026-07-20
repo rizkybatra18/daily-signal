@@ -348,6 +348,12 @@ def _load_batch_from_db(
         df_t = df_t.dropna(subset=["close"])
         if not df_t.empty:
             results[ticker] = df_t
+    log.info(f"[DEBUG] results tickers = {len(results)}")
+    log.info(f"[DEBUG] unique tickers df_all = {df_all['ticker'].nunique()}")
+
+    missing = sorted(set(tickers) - set(results.keys()))
+    log.info(f"[DEBUG] missing ticker count = {len(missing)}")
+    log.info(f"[DEBUG] first missing = {missing[:20]}")
 
     return results
 
