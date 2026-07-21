@@ -315,6 +315,10 @@ def _load_batch_from_db(
                     .range(0, 100000)
                     .execute()
                 )
+                if res.data:
+                    returned = sorted({r["ticker"] for r in res.data})
+                    log.info(f"[DEBUG] Returned ticker count = {len(returned)}")
+                    log.info(f"[DEBUG] Returned first 20 = {returned[:20]}")
                 log.info(f"[DEBUG] res.count = {getattr(res, 'count', None)}")
                 log.info(f"[DEBUG] len(res.data) = {len(res.data) if res.data else 0}")
                 log.info(f"[DEBUG] first row = {res.data[0] if res.data else None}")
