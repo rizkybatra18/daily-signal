@@ -51,7 +51,7 @@ st.set_page_config(
 #  DESIGN SYSTEM — CSS
 # ══════════════════════════════════════════════════════════════════
 
-st.markdown("""
+_CSS_BLOCK = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -212,7 +212,18 @@ hr{ border-color: var(--border) !important; }
 .stDataFrame{ border-radius:12px; overflow:hidden; border:1px solid var(--border); }
 button[kind="secondary"], button[kind="primary"]{ border-radius:9px !important; }
 </style>
-""", unsafe_allow_html=True)
+"""
+
+# st.html() dipakai (bukan st.markdown unsafe_allow_html) — st.html
+# me-render HTML/CSS mentah TANPA lewat markdown parser sama sekali,
+# menghindari kelas bug di mana konten CSS (komentar box-drawing,
+# selector atribut [attr="value"]) bisa salah ditafsirkan markdown
+# parser dan ikut muncul sebagai teks mentah di halaman.
+# Fallback ke st.markdown untuk Streamlit versi sangat lama (<1.29).
+try:
+    st.html(_CSS_BLOCK)
+except AttributeError:
+    st.markdown(_CSS_BLOCK, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
