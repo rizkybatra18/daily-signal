@@ -1,11 +1,11 @@
 """
-DAILY SIGNAL — Main Runner v2.2
+DAILY SIGNAL — Main Runner v3.0
 Entry point untuk GitHub Actions dan CLI.
 """
 
 import sys
 import argparse
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import pytz
 
 from src.core.logger import setup_logging, get_logger
@@ -93,12 +93,8 @@ def cmd_daily_scan(args):
 def cmd_pre_market(args):
     """
     Kirim alert pre-market (08:30 WIB).
-
     Mengambil regime dari DATABASE (hasil scan kemarin) — bukan hitung
-    ulang. Alasan:
-      1. Jam 08:30 WIB Yahoo Finance belum update candle hari ini
-      2. Data regime terbaru sudah tersimpan di DB dari scan 17:30 kemarin
-      3. Konsisten dengan angka yang ditampilkan di daily scan sebelumnya
+    ulang. Lihat catatan lengkap di send_market_open_alert (bot.py).
     """
     from src.signals.regime_engine import get_latest_regime
     from src.telegram.bot import send_market_open_alert
@@ -172,9 +168,6 @@ def cmd_run_backtests(args):
     tickers = get_all_bei_tickers()[:limit]
     passed = 0
 
-    # AUDIT FIX: sertakan data IHSG agar backtest bisa menghitung
-    # Relative Strength sungguhan (dimensi "strength" di composite
-    # score), bukan selalu netral/0 seperti sebelumnya.
     ihsg_df = get_ohlcv_from_db(settings.ihsg_ticker, days=365 * 3)
     ihsg_close = ihsg_df["close"] if ihsg_df is not None and not ihsg_df.empty else None
     if ihsg_close is None:
@@ -204,12 +197,12 @@ def cmd_run_backtests(args):
 
 def cmd_db_cleanup(args):
     from src.core.database import get_db
-    from datetime import date, timedelta
     try:
         db = get_db()
         cutoff = (date.today() - timedelta(days=30)).isoformat()
-        db.table("system_logs").delete().lt("log_time", cutoff).execute()
-        log.info("✓ DB cleanup selesai")
+        result = db.table("system_logs").delete().lt("log_time", cutoff).execute()
+        deleted = len(result.data) if result.data else 0
+        log.info(f"✓ DB cleanup selesai ({deleted} log lama dihapus)")
     except Exception as e:
         log.error(f"DB cleanup gagal: {e}")
 
@@ -228,17 +221,173 @@ def cmd_portfolio_snapshot(args):
     log.info("✓ Snapshot tersimpan")
 
 
+# ══════════════════════════════════════════════════════════════════
+#  WEEKLY REPORT — pengumpulan statistik NYATA dari database
+# ══════════════════════════════════════════════════════════════════
+
+def gather_weekly_stats() -> dict:
+    """
+    Kumpulkan statistik 7 hari terakhir untuk Weekly Report.
+    Murni QUERY (baca) ke tabel yang sudah ada — tidak ada perubahan
+    skema/engine/scoring. Setiap bagian dibungkus try/except sendiri
+    agar satu sumber data gagal tidak menggagalkan seluruh laporan
+    (laporan tetap terkirim dengan bagian yang tersedia).
+    """
+    import re as _re
+    from src.core.database import get_db
+    from src.signals.regime_engine import get_latest_regime
+    from src.telegram.bot import check_telegram_health
+
+    since = (date.today() - timedelta(days=7)).isoformat()
+    stats: dict = {}
+
+    # ── Universe ─────────────────────────────────────────────────
+    try:
+        db = get_db()
+        total = db.table("stocks").select("ticker", count="exact") \
+                  .eq("is_active", True).eq("is_delisted", False).limit(1).execute()
+        total_count = total.count or 0
+
+        # Parse ringkasan terakhir dari log refresh_universe (sudah
+        # dicatat log.info di universe_manager.py — bukan tabel baru,
+        # murni membaca log yang memang sudah ada).
+        added, removed = "N/A", "N/A"
+        logs = db.table("system_logs").select("message") \
+                 .order("log_time", desc=True).limit(200).execute()
+        for row in (logs.data or []):
+            msg = row.get("message", "")
+            if "Universe refresh selesai" in msg:
+                m_add = _re.search(r"\+(\d+) baru", msg)
+                m_rem = _re.search(r"-(\d+) delisting", msg)
+                if m_add: added = int(m_add.group(1))
+                if m_rem: removed = int(m_rem.group(1))
+                break
+
+        stats["universe"] = {"total": total_count, "added": added, "removed": removed}
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: universe gagal — {e}")
+        stats["universe"] = {}
+
+    # ── Database ─────────────────────────────────────────────────
+    try:
+        from src.core.database import health_check as db_health
+        h = db_health()
+        stats["database"] = {
+            "healthy": h.get("status") == "healthy",
+            "status": h.get("status", "unknown"),
+            "cleanup_note": "Log > 30 hari dibersihkan otomatis",
+        }
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: database gagal — {e}")
+        stats["database"] = {}
+
+    # ── Backtest (7 hari terakhir) ───────────────────────────────
+    try:
+        db = get_db()
+        bt = db.table("backtest_results").select("*") \
+               .gte("run_date", since).execute()
+        rows = bt.data or []
+        if rows:
+            win_rates = [float(r.get("win_rate") or 0) for r in rows]
+            pfs       = [float(r.get("profit_factor") or 0) for r in rows]
+            sharpes   = [float(r.get("sharpe_ratio") or 0) for r in rows]
+            best = max(rows, key=lambda r: float(r.get("win_rate") or 0))
+            stats["backtest"] = {
+                "count": len(rows),
+                "avg_win_rate": sum(win_rates)/len(win_rates),
+                "avg_profit_factor": sum(pfs)/len(pfs),
+                "avg_sharpe": sum(sharpes)/len(sharpes),
+                "best_ticker": str(best.get("ticker","")).replace(".JK",""),
+                "best_win_rate": float(best.get("win_rate") or 0),
+            }
+        else:
+            stats["backtest"] = {"count": 0}
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: backtest gagal — {e}")
+        stats["backtest"] = {"count": 0}
+
+    # ── Scanner statistics (7 hari terakhir) ─────────────────────
+    try:
+        db = get_db()
+        runs = db.table("scan_runs").select("*") \
+                 .eq("run_type", "DAILY_SCAN").gte("started_at", since).execute()
+        sigs = db.table("signals").select("signal_type") \
+                 .gte("signal_date", since).execute()
+        sig_rows = sigs.data or []
+        stats["scanner"] = {
+            "total_runs": len(runs.data or []),
+            "strong_buy": sum(1 for s in sig_rows if s.get("signal_type") == "STRONG_BUY"),
+            "buy": sum(1 for s in sig_rows if s.get("signal_type") == "BUY"),
+            "watchlist": sum(1 for s in sig_rows if s.get("signal_type") == "WATCHLIST"),
+        }
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: scanner gagal — {e}")
+        stats["scanner"] = {}
+
+    # ── System Health ────────────────────────────────────────────
+    try:
+        tg = check_telegram_health()
+        stats["health"] = {
+            "database": stats.get("database", {}).get("healthy", False),
+            "telegram": tg.get("status") == "healthy",
+            "github": True,   # Jika script ini berjalan, GitHub Actions sukses trigger
+            "supabase": stats.get("database", {}).get("healthy", False),
+        }
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: health gagal — {e}")
+        stats["health"] = {}
+
+    # ── Market Summary ───────────────────────────────────────────
+    try:
+        regime = get_latest_regime()
+        if regime:
+            stats["market"] = {
+                "regime": regime.regime,
+                "breadth": f"{regime.breadth_score:.0f}% naik",
+                "strength": f"{regime.ihsg_adx:.1f}",
+            }
+        else:
+            stats["market"] = {}
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: market gagal — {e}")
+        stats["market"] = {}
+
+    # ── Top 5 Sektor ─────────────────────────────────────────────
+    try:
+        db = get_db()
+        sec = db.table("sector_rankings").select("*") \
+                .order("rank_date", desc=True).order("rank_position").limit(5).execute()
+        stats["top_sectors"] = sec.data or []
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: sectors gagal — {e}")
+        stats["top_sectors"] = []
+
+    # ── Top 5 Sinyal Minggu Ini ──────────────────────────────────
+    try:
+        db = get_db()
+        top = db.table("signals").select("ticker,signal_type,composite_score") \
+                .gte("signal_date", since).order("composite_score", desc=True).limit(5).execute()
+        stats["top_signals"] = top.data or []
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: top_signals gagal — {e}")
+        stats["top_signals"] = []
+
+    return stats
+
+
 def cmd_weekly_report(args):
-    from src.telegram.bot import send_daily_summary
-    log.info("▶ Weekly report...")
-    send_daily_summary({"stocks_scanned":"N/A","strong_buy":"N/A",
-                        "buy":"N/A","watchlist":"N/A","regime":"N/A","duration_seconds":0})
-    log.info("✓ Report dikirim")
+    """Kumpulkan statistik 7 hari terakhir & kirim Weekly Report premium."""
+    from src.telegram.bot import send_weekly_report
+    log.info("▶ Mengumpulkan statistik mingguan...")
+    stats = gather_weekly_stats()
+    log.info("▶ Mengirim weekly report...")
+    ok = send_weekly_report(stats)
+    log.info("✓ Report dikirim" if ok else "✗ Gagal kirim report")
 
 
 def main():
     setup_logging(settings.log_level)
-    log.info(f"═══ DAILY SIGNAL Runner v2.2 | {datetime.now(WIB).strftime('%Y-%m-%d %H:%M WIB')} ═══")
+    log.info(f"═══ DAILY SIGNAL Runner v3.0 | {datetime.now(WIB).strftime('%Y-%m-%d %H:%M WIB')} ═══")
 
     parser = argparse.ArgumentParser(description="DAILY SIGNAL Runner")
     parser.add_argument("command", choices=[

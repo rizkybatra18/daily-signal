@@ -392,6 +392,7 @@ def get_latest_regime() -> Optional[MarketRegime]:
             regime_weight={"BULL": 1.0, "SIDEWAYS": 0.75, "BEAR": 0.4}.get(row["regime"], 0.75),
             ihsg_close=row.get("ihsg_close", 0),
             ihsg_rsi=row.get("ihsg_rsi", 50),
+            ihsg_adx=row.get("ihsg_adx", 0) or 0,
             change_5d=row.get("change_5d_pct", 0),
             regime_reason=row.get("regime_reason", ""),
             advance_count=row.get("advance_count", 0) or 0,

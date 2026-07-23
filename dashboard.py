@@ -1,8 +1,21 @@
 """
-DAILY SIGNAL — Streamlit Dashboard v2.0
-8 halaman: Market Overview, Top Signals, Why This Signal,
-Historical Signals, Signal Performance, Sector Rotation,
-Portfolio, System Logs. Semua null-safe.
+DAILY SIGNAL — "Sinyal Dari Langit" Dashboard v3.0
+Premium terminal-style UI untuk BEI Stock Scanner.
+
+Design System:
+    - Typography : Manrope (heading) + Inter (body/angka, tabular-nums)
+    - Palette    : dark terminal (#0a0e1a base), emerald/amber/red signal colors
+    - Components : hero card, metric tile, gauge bar, signal card, chip/badge
+
+9 halaman: Home, Top Signals, Signal Detail ("Why This Signal?"),
+Historical Signals, Signal Performance, Sector Rotation, Portfolio,
+System Health, (System Logs digabung ke System Health).
+
+TIDAK ADA perubahan ke engine/scoring/database — murni presentasi.
+Kolom baru (raw_score, confidence, factor_contribution, sector_bonus,
+pct_above_ema20/50/200) dari migration 002 dipakai bila tersedia,
+dengan fallback aman bila migration belum dijalankan (semua .get()
+dengan default, tidak pernah crash karena kolom belum ada).
 """
 
 import streamlit as st
@@ -17,49 +30,211 @@ _WIB = pytz.timezone("Asia/Jakarta")
 def _now_wib() -> datetime:
     """Waktu sekarang dalam WIB."""
     return datetime.now(_WIB)
-import os, sys
 
+import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dotenv import load_dotenv
 load_dotenv()
 
-# ── Page Config ─────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+#  PAGE CONFIG
+# ══════════════════════════════════════════════════════════════════
+
 st.set_page_config(
-    page_title="DAILY SIGNAL — BEI Scanner",
-    page_icon="📈", layout="wide",
+    page_title="Sinyal Dari Langit — Daily Signal",
+    page_icon="✦",
+    layout="wide",
     initial_sidebar_state="expanded",
 )
 
+# ══════════════════════════════════════════════════════════════════
+#  DESIGN SYSTEM — CSS
+# ══════════════════════════════════════════════════════════════════
+
 st.markdown("""
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-.main{padding:0 1.2rem}.block-container{padding-top:.8rem}
-div[data-testid="stSidebarContent"]{background:#0d1b2a}
-div[data-testid="metric-container"]{background:#1a2744;border:1px solid #1e3a5f;border-radius:10px;padding:14px 18px}
-div[data-testid="metric-container"] label{color:#8899bb!important;font-size:.78rem}
-div[data-testid="metric-container"] div[data-testid="stMetricValue"]{font-size:1.4rem;font-weight:700;color:#e8f0ff}
-.badge-sb{background:#00c853;color:#000;padding:2px 10px;border-radius:12px;font-weight:700;font-size:.75rem}
-.badge-buy{background:#69f0ae;color:#000;padding:2px 10px;border-radius:12px;font-weight:700;font-size:.75rem}
-.badge-wl{background:#ffd740;color:#000;padding:2px 10px;border-radius:12px;font-weight:700;font-size:.75rem}
-.badge-av{background:#ff5252;color:#fff;padding:2px 10px;border-radius:12px;font-weight:700;font-size:.75rem}
-.section-title{font-size:1.1rem;font-weight:700;color:#aaccff;border-left:4px solid #4488ff;padding-left:10px;margin:16px 0 8px}
-.info-box{background:#0d2137;border:1px solid #1e3a5f;border-radius:8px;padding:12px 16px;margin:6px 0;font-size:.9rem;color:#c8d8f0}
-.info-box b{color:#7ab8ff}
-.interp{color:#aaccee;font-size:.88rem;line-height:1.6}
-.interp .good{color:#00ff88;font-weight:600}
-.interp .warn{color:#ffd700;font-weight:600}
-.interp .bad{color:#ff6b6b;font-weight:600}
-.sbar-wrap{background:#1a2744;border-radius:6px;height:8px;margin-top:4px}
-.sbar-fill{height:8px;border-radius:6px}
+
+/* ── Base tokens ─────────────────────────────────────────────── */
+:root{
+    --bg:            #0a0e1a;
+    --surface:       #131824;
+    --surface-2:     #171d2c;
+    --border:        #1f2937;
+    --border-soft:   #1a2233;
+    --text:          #e8ebf2;
+    --text-dim:      #9aa4b8;
+    --text-faint:    #5c6478;
+    --accent:        #60a5fa;
+    --accent-soft:   rgba(96,165,250,.12);
+    --strong-buy:    #00c896;
+    --buy:           #4ade80;
+    --watchlist:     #fbbf24;
+    --avoid:         #f87171;
+    --strong-buy-bg: rgba(0,200,150,.12);
+    --buy-bg:        rgba(74,222,128,.12);
+    --watchlist-bg:  rgba(251,191,36,.12);
+    --avoid-bg:      rgba(248,113,113,.12);
+}
+
+html, body, [class*="css"]{
+    font-family: 'Inter', -apple-system, sans-serif;
+}
+h1,h2,h3,h4, .ds-heading{
+    font-family: 'Manrope', sans-serif !important;
+}
+
+.main{ padding: 0 1.4rem; background: var(--bg); }
+.block-container{ padding-top: 1rem; padding-bottom: 2rem; max-width: 1400px; }
+[data-testid="stAppViewContainer"]{ background: var(--bg); }
+[data-testid="stHeader"]{ background: transparent; }
+
+/* Angka selalu tabular (sejajar) */
+.ds-num{ font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+/* ── Sidebar ──────────────────────────────────────────────────── */
+div[data-testid="stSidebarContent"]{
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+}
+.ds-brand{
+    font-family:'Manrope',sans-serif; font-weight:800; font-size:1.3rem;
+    letter-spacing:-.02em; color:var(--text); margin-bottom:0;
+    display:flex; align-items:center; gap:8px;
+}
+.ds-brand-sub{ color:var(--text-faint); font-size:.72rem; letter-spacing:.08em;
+    text-transform:uppercase; margin-top:2px; margin-bottom:14px; }
+
+div[data-testid="stSidebarContent"] div[role="radiogroup"] label{
+    padding: 9px 12px !important; border-radius: 8px !important;
+    margin-bottom: 2px !important; transition: background .15s;
+}
+div[data-testid="stSidebarContent"] div[role="radiogroup"] label:hover{
+    background: var(--surface-2);
+}
+
+/* ── Streamlit native metric (dipakai minimal, mostly diganti ds-metric) */
+div[data-testid="metric-container"]{
+    background: var(--surface); border:1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px;
+}
+div[data-testid="metric-container"] label{ color:var(--text-dim) !important; font-size:.75rem; }
+div[data-testid="metric-container"] div[data-testid="stMetricValue"]{
+    font-size:1.35rem; font-weight:700; color:var(--text); font-family:'Inter',sans-serif;
+}
+
+/* ── Typography helpers ──────────────────────────────────────── */
+.ds-page-title{ font-family:'Manrope',sans-serif; font-weight:800; font-size:1.7rem;
+    color:var(--text); letter-spacing:-.02em; margin-bottom:2px; }
+.ds-page-sub{ color:var(--text-faint); font-size:.85rem; margin-bottom:1.1rem; }
+.ds-section{ font-family:'Manrope',sans-serif; font-weight:700; font-size:.95rem;
+    color:var(--text); margin: 22px 0 10px; display:flex; align-items:center; gap:8px; }
+.ds-section .ds-section-line{ flex:1; height:1px; background:var(--border); }
+.ds-caption{ color:var(--text-faint); font-size:.78rem; }
+
+/* ── Cards ────────────────────────────────────────────────────── */
+.ds-card{
+    background: var(--surface); border:1px solid var(--border);
+    border-radius: 14px; padding: 18px 20px; margin-bottom: 12px;
+}
+.ds-card-flush{ padding:0; overflow:hidden; }
+.ds-hero{
+    background: linear-gradient(135deg, var(--surface) 0%, var(--surface-2) 100%);
+    border:1px solid var(--border); border-radius:16px; padding:22px 26px; margin-bottom:16px;
+}
+
+/* ── Metric tile (custom, dipakai di Home & Signal Detail) ──── */
+.ds-tile{
+    background: var(--surface); border:1px solid var(--border); border-radius:12px;
+    padding:13px 16px; height:100%;
+}
+.ds-tile-label{ color:var(--text-faint); font-size:.7rem; text-transform:uppercase;
+    letter-spacing:.06em; margin-bottom:5px; }
+.ds-tile-value{ font-family:'Inter',sans-serif; font-weight:700; font-size:1.25rem;
+    color:var(--text); font-variant-numeric: tabular-nums; }
+.ds-tile-delta{ font-size:.74rem; margin-top:3px; }
+.ds-up{ color: var(--buy); } .ds-down{ color: var(--avoid); } .ds-flat{ color:var(--text-faint); }
+
+/* ── Badges / Chips ───────────────────────────────────────────── */
+.ds-badge{ display:inline-flex; align-items:center; gap:5px; padding:3px 11px;
+    border-radius:20px; font-weight:700; font-size:.71rem; letter-spacing:.02em; }
+.ds-badge::before{ content:''; width:6px; height:6px; border-radius:50%; }
+.ds-badge-sb{ background:var(--strong-buy-bg); color:var(--strong-buy); }
+.ds-badge-sb::before{ background:var(--strong-buy); }
+.ds-badge-buy{ background:var(--buy-bg); color:var(--buy); }
+.ds-badge-buy::before{ background:var(--buy); }
+.ds-badge-wl{ background:var(--watchlist-bg); color:var(--watchlist); }
+.ds-badge-wl::before{ background:var(--watchlist); }
+.ds-badge-av{ background:var(--avoid-bg); color:var(--avoid); }
+.ds-badge-av::before{ background:var(--avoid); }
+
+.ds-chip{ display:inline-block; padding:2px 9px; border-radius:6px; font-size:.71rem;
+    background:var(--surface-2); color:var(--text-dim); border:1px solid var(--border); }
+.ds-chip-accent{ background:var(--accent-soft); color:var(--accent); border-color:transparent; }
+
+.ds-conf{ display:inline-flex; align-items:center; gap:4px; font-size:.71rem; font-weight:600; }
+.ds-conf-dots span{ width:5px; height:5px; border-radius:50%; display:inline-block; margin-right:2px; background:var(--border); }
+
+/* ── Gauge / progress bars ───────────────────────────────────── */
+.ds-gauge-row{ display:flex; align-items:center; gap:10px; margin:7px 0; }
+.ds-gauge-label{ width:92px; font-size:.78rem; color:var(--text-dim); flex-shrink:0; }
+.ds-gauge-track{ flex:1; height:9px; background:var(--surface-2); border-radius:5px; overflow:hidden; }
+.ds-gauge-fill{ height:100%; border-radius:5px; }
+.ds-gauge-val{ width:52px; text-align:right; font-size:.78rem; font-weight:700; color:var(--text);
+    font-variant-numeric: tabular-nums; flex-shrink:0; }
+
+/* ── Signal list row (Top Signals / Home top picks) ──────────── */
+.ds-row{
+    display:flex; align-items:center; gap:14px; padding:12px 16px;
+    border-bottom:1px solid var(--border-soft); transition:background .12s;
+}
+.ds-row:last-child{ border-bottom:none; }
+.ds-row:hover{ background: var(--surface-2); }
+.ds-row-ticker{ font-weight:700; font-size:.92rem; color:var(--text); width:64px; flex-shrink:0; }
+.ds-row-sector{ color:var(--text-faint); font-size:.72rem; }
+
+/* ── Reason checklist ─────────────────────────────────────────── */
+.ds-reason{ display:flex; align-items:flex-start; gap:8px; padding:6px 0; font-size:.87rem; color:var(--text-dim); }
+.ds-reason-check{ color:var(--strong-buy); font-weight:800; flex-shrink:0; }
+
+/* ── Health dot ───────────────────────────────────────────────── */
+.ds-health{ display:flex; align-items:center; gap:8px; padding:9px 0; }
+.ds-health-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.ds-health-ok{ background:var(--buy); box-shadow:0 0 6px var(--buy); }
+.ds-health-bad{ background:var(--avoid); box-shadow:0 0 6px var(--avoid); }
+.ds-health-warn{ background:var(--watchlist); box-shadow:0 0 6px var(--watchlist); }
+
+hr{ border-color: var(--border) !important; }
+.ds-hr{ height:1px; background:var(--border); margin:14px 0; border:none; }
+
+/* Streamlit widget refinement */
+.stDataFrame{ border-radius:12px; overflow:hidden; border:1px solid var(--border); }
+button[kind="secondary"], button[kind="primary"]{ border-radius:9px !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ════════ SAFE HELPERS ═══════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  SAFE HELPERS
+# ══════════════════════════════════════════════════════════════════
 
 def sf(v, d=0.0):
     if v is None: return d
     try: return float(v)
     except: return d
+
+def _styler_apply(styler, func, subset=None):
+    """
+    Kompatibilitas pandas Styler lintas versi: pandas >= 2.1 memakai
+    .map(), versi lebih lama memakai .applymap() (sudah dihapus di
+    pandas terbaru). Dicoba .map() dulu, fallback ke .applymap().
+    """
+    try:
+        return styler.map(func, subset=subset)
+    except AttributeError:
+        return styler.applymap(func, subset=subset)
+
 
 def si(v, d=0):
     if v is None: return d
@@ -74,37 +249,79 @@ def fmt_pct(v, dec=1, dec100=False):
     x = sf(v) * (100 if dec100 else 1)
     return f"{x:+.{dec}f}%"
 
+SIGNAL_COLOR = {"STRONG_BUY":"#00c896","BUY":"#4ade80","WATCHLIST":"#fbbf24","AVOID":"#f87171"}
+SIGNAL_BG    = {"STRONG_BUY":"rgba(0,200,150,.12)","BUY":"rgba(74,222,128,.12)",
+                "WATCHLIST":"rgba(251,191,36,.12)","AVOID":"rgba(248,113,113,.12)"}
+SIGNAL_LABEL = {"STRONG_BUY":"STRONG BUY","BUY":"BUY","WATCHLIST":"WATCHLIST","AVOID":"AVOID"}
+
 def score_color(s):
     s = sf(s)
-    if s >= 75: return "#00c853"
-    if s >= 60: return "#69f0ae"
-    if s >= 45: return "#ffd740"
-    return "#ff5252"
+    if s >= 75: return "#00c896"
+    if s >= 60: return "#4ade80"
+    if s >= 45: return "#fbbf24"
+    return "#f87171"
 
 def signal_badge(t):
-    cls = {"STRONG_BUY":"badge-sb","BUY":"badge-buy","WATCHLIST":"badge-wl","AVOID":"badge-av"}.get(t,"badge-av")
-    return f'<span class="{cls}">{t.replace("_"," ")}</span>'
+    cls = {"STRONG_BUY":"ds-badge-sb","BUY":"ds-badge-buy","WATCHLIST":"ds-badge-wl","AVOID":"ds-badge-av"}.get(t,"ds-badge-av")
+    label = SIGNAL_LABEL.get(t, ss(t).replace("_"," "))
+    return f'<span class="ds-badge {cls}">{label}</span>'
 
-def score_bar(s, mx=100):
-    pct = min(sf(s)/mx*100, 100)
-    c = score_color(sf(s) if mx==100 else sf(s)/mx*100)
-    return f'<div class="sbar-wrap"><div class="sbar-fill" style="width:{pct:.0f}%;background:{c}"></div></div>'
+def confidence_badge(c):
+    """Confidence dari migration 002 (compute_confidence) — fallback aman jika belum ada."""
+    c = ss(c, "Low")
+    dots = {"Very High":4, "High":3, "Medium":2, "Low":1}.get(c, 1)
+    colors = {"Very High":"#00c896","High":"#4ade80","Medium":"#fbbf24","Low":"#9aa4b8"}
+    color = colors.get(c, "#9aa4b8")
+    dot_html = "".join(
+        f'<span style="background:{color if i < dots else "#232c3d"}"></span>'
+        for i in range(4)
+    )
+    return f'<span class="ds-conf" style="color:{color}"><span class="ds-conf-dots">{dot_html}</span>{c}</span>'
 
-def regime_emoji(r):
-    return {"BULL":"🟢","SIDEWAYS":"🟡","BEAR":"🔴"}.get(r,"⚪")
+def gauge_row(label, val, mx, color=None):
+    pct = min(sf(val)/mx*100, 100) if mx > 0 else 0
+    c = color or score_color(pct)
+    return (
+        f'<div class="ds-gauge-row">'
+        f'<div class="ds-gauge-label">{label}</div>'
+        f'<div class="ds-gauge-track"><div class="ds-gauge-fill" style="width:{pct:.0f}%;background:{c}"></div></div>'
+        f'<div class="ds-gauge-val">{sf(val):.0f}/{mx:.0f}</div>'
+        f'</div>'
+    )
 
-def regime_color(r):
-    return {"BULL":"#00ff88","SIDEWAYS":"#ffd700","BEAR":"#ff4757"}.get(r,"#aaa")
+def tile(label, value, delta=None, delta_dir="flat"):
+    dcls = {"up":"ds-up","down":"ds-down","flat":"ds-flat"}.get(delta_dir,"ds-flat")
+    delta_html = f'<div class="ds-tile-delta {dcls}">{delta}</div>' if delta else ""
+    return (
+        f'<div class="ds-tile"><div class="ds-tile-label">{label}</div>'
+        f'<div class="ds-tile-value ds-num">{value}</div>{delta_html}</div>'
+    )
+
+def section(title, icon=""):
+    st.markdown(
+        f'<div class="ds-section">{icon} {title}<div class="ds-section-line"></div></div>',
+        unsafe_allow_html=True
+    )
+
+def regime_visual(r):
+    return {
+        "BULL":     ("🟢", "#00c896", "Kondisi pasar mendukung — sinyal beli lebih terpercaya."),
+        "SIDEWAYS": ("🟡", "#fbbf24", "Pasar konsolidasi — pilih saham selektif dengan skor tinggi."),
+        "BEAR":     ("🔴", "#f87171", "Pasar melemah — kurangi eksposur, perketat stop loss."),
+    }.get(r, ("⚪", "#9aa4b8", "Status pasar belum diketahui."))
 
 DARK_BG = "rgba(0,0,0,0)"
-PLOT_BG = "rgba(13,17,23,1)"
-GRID    = "#1a2744"
+PLOT_BG = "rgba(19,24,36,1)"
+GRID    = "#1f2937"
 LAYOUT  = dict(paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG,
+               font=dict(family="Inter, sans-serif", color="#9aa4b8", size=11),
                margin=dict(l=0,r=0,t=30,b=0),
                xaxis=dict(gridcolor=GRID), yaxis=dict(gridcolor=GRID))
 
 
-# ════════ DB CONNECTION ══════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  DB CONNECTION
+# ══════════════════════════════════════════════════════════════════
 
 @st.cache_resource
 def get_db():
@@ -116,7 +333,12 @@ def get_db():
         return None
 
 
-# ════════ DATA LOADERS ═══════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  DATA LOADERS
+#  (Query LOGIC tidak diubah dari versi sebelumnya — hanya kolom
+#  baru dari migration 002 ditambahkan ke SELECT eksplisit, karena
+#  presentasi butuh field itu. Tidak menyentuh engine/scoring/DB.)
+# ══════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=300)
 def load_signals(sig_date=None):
@@ -138,7 +360,8 @@ def load_signals_range(days=30):
         cols = ("signal_date,ticker,signal_type,composite_score,close_price,"
                 "entry_price,stop_loss,target_1,target_2,risk_reward,rsi,adx,"
                 "volume_ratio,rel_strength,sector,ema20,ema50,ema200,"
-                "trend_score,momentum_score,volume_score,strength_score,volatility_score")
+                "trend_score,momentum_score,volume_score,strength_score,volatility_score,"
+                "raw_score,sector_bonus,confidence")
         r = db.table("signals").select(cols).gte("signal_date", since)\
               .order("signal_date", desc=True).order("composite_score", desc=True).execute()
         return r.data or []
@@ -159,7 +382,8 @@ def load_regime_history(days=30):
         db = get_db()
         if not db: return []
         r = db.table("market_regimes")\
-              .select("regime_date,regime,ihsg_close,ihsg_rsi,change_5d_pct")\
+              .select("regime_date,regime,ihsg_close,ihsg_rsi,change_5d_pct,"
+                      "pct_above_ema20,pct_above_ema50,pct_above_ema200")\
               .order("regime_date", desc=True).limit(days).execute()
         return r.data or []
     except: return []
@@ -223,85 +447,135 @@ def load_logs(lim=50):
         return r.data or []
     except: return []
 
+@st.cache_data(ttl=120)
+def load_universe_count():
+    try:
+        db = get_db()
+        if not db: return 0
+        r = db.table("stocks").select("ticker", count="exact")\
+              .eq("is_active", True).eq("is_delisted", False).limit(1).execute()
+        return r.count or 0
+    except: return 0
 
-# ════════ SIDEBAR ════════════════════════════════════════════════════
+@st.cache_data(ttl=120)
+def load_last_scan_run():
+    try:
+        db = get_db()
+        if not db: return None
+        r = db.table("scan_runs").select("*").eq("run_type", "DAILY_SCAN")\
+              .order("started_at", desc=True).limit(1).execute()
+        return r.data[0] if r.data else None
+    except: return None
+
+
+# ══════════════════════════════════════════════════════════════════
+#  SIDEBAR
+# ══════════════════════════════════════════════════════════════════
+
+PAGES = [
+    ("home", "🏠", "Home"),
+    ("signals", "🚀", "Top Signals"),
+    ("detail", "🔍", "Signal Detail"),
+    ("history", "📅", "Historical Signals"),
+    ("performance", "📊", "Signal Performance"),
+    ("sector", "🏭", "Sector Rotation"),
+    ("portfolio", "💼", "Portfolio"),
+    ("health", "⚙️", "System Health"),
+]
 
 def render_sidebar():
     with st.sidebar:
-        st.markdown("## 📈 DAILY SIGNAL")
-        st.markdown("*BEI Stock Scanner v2.0*")
-        st.divider()
-        page = st.radio("nav", [
-            "🏠  Market Overview",
-            "🚀  Top Signals",
-            "🔍  Why This Signal?",
-            "📅  Historical Signals",
-            "📊  Signal Performance",
-            "🏭  Sector Rotation",
-            "💼  Portfolio",
-            "⚙️  System Logs",
-        ], label_visibility="collapsed")
-        st.divider()
+        st.markdown('<div class="ds-brand">✦ SINYAL DARI LANGIT</div>', unsafe_allow_html=True)
+        st.markdown('<div class="ds-brand-sub">Daily Signal · BEI Scanner</div>', unsafe_allow_html=True)
+
+        labels = [f"{icon}  {name}" for _, icon, name in PAGES]
+        keys   = [k for k, _, _ in PAGES]
+        choice = st.radio("nav", labels, label_visibility="collapsed")
+        page = keys[labels.index(choice)]
+
+        st.markdown("<hr class='ds-hr'>", unsafe_allow_html=True)
+
         regime = load_regime()
         if regime:
-            r  = ss(regime.get("regime"), "N/A")
-            e  = regime_emoji(r)
-            c  = regime_color(r)
-            st.markdown(f"**Regime** {e} <span style='color:{c};font-weight:700'>{r}</span>",
-                        unsafe_allow_html=True)
+            r = ss(regime.get("regime"), "N/A")
+            emoji, color, _ = regime_visual(r)
+            st.markdown(
+                f'<div style="display:flex;justify-content:space-between;align-items:center">'
+                f'<span style="color:#9aa4b8;font-size:.78rem">Market Regime</span>'
+                f'<span style="color:{color};font-weight:700;font-size:.85rem">{emoji} {r}</span></div>',
+                unsafe_allow_html=True
+            )
             ihsg = sf(regime.get("ihsg_close"))
             chg5 = sf(regime.get("change_5d_pct"))
-            st.markdown(f"**IHSG** Rp{ihsg:,.0f} `{chg5:+.1f}%`")
-            st.markdown(f"**RSI** {sf(regime.get('ihsg_rsi')):.1f}")
+            chg_color = "#4ade80" if chg5 >= 0 else "#f87171"
+            st.markdown(
+                f'<div style="margin-top:8px;font-size:.82rem;color:#e8ebf2" class="ds-num">'
+                f'Rp{ihsg:,.0f} <span style="color:{chg_color}">({chg5:+.1f}%)</span></div>',
+                unsafe_allow_html=True
+            )
         else:
-            st.markdown("*Belum ada data*")
-        st.divider()
-        if st.button("🔄 Refresh", use_container_width=True):
+            st.caption("Belum ada data regime")
+
+        st.markdown("<hr class='ds-hr'>", unsafe_allow_html=True)
+        if st.button("🔄 Refresh Data", use_container_width=True):
             st.cache_data.clear(); st.rerun()
-        st.caption(f"Update: {_now_wib().strftime('%H:%M WIB')}")
+        st.caption(f"Update {_now_wib().strftime('%H:%M WIB')}")
+
     return page
 
 
-# ════════ PAGE 1 — MARKET OVERVIEW ══════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  PAGE — HOME
+# ══════════════════════════════════════════════════════════════════
 
-def page_market_overview():
-    st.title("🏠 Market Overview")
-    st.caption(_now_wib().strftime("%A, %d %B %Y"))
+def page_home():
+    st.markdown('<div class="ds-page-title">Market Overview</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="ds-page-sub">{_now_wib().strftime("%A, %d %B %Y")}</div>', unsafe_allow_html=True)
 
     regime  = load_regime()
     signals = load_signals()
     sectors = load_sectors()
 
+    # ── MARKET STATUS hero ──────────────────────────────────────
+    section("MARKET STATUS", "🧭")
     if not regime:
-        st.info("🕐 Belum ada data. Scan pertama berjalan ~17:30 WIB setiap hari bursa.")
+        st.info("Belum ada data. Scan pertama berjalan ~17:30 WIB setiap hari bursa.")
     else:
-        r    = ss(regime.get("regime"), "N/A")
-        e    = regime_emoji(r)
-        c    = regime_color(r)
-        desc = {"BULL":  "Kondisi pasar mendukung — sinyal beli lebih terpercaya.",
-                "SIDEWAYS": "Pasar konsolidasi — pilih saham selektif score tinggi.",
-                "BEAR":  "Pasar melemah — kurangi eksposur, perketat stop loss."}.get(r, "")
-        st.markdown(
-            f"<div class='info-box'><b style='font-size:1.3rem'>{e} Market Regime: "
-            f"<span style='color:{c}'>{r}</span></b><br>"
-            f"<span class='interp'>{desc}</span></div>", unsafe_allow_html=True)
+        r = ss(regime.get("regime"), "N/A")
+        emoji, color, desc = regime_visual(r)
+        ihsg  = sf(regime.get("ihsg_close"))
+        chg5  = sf(regime.get("change_5d_pct"))
+        rsi   = sf(regime.get("ihsg_rsi"))
+        adx   = sf(regime.get("ihsg_adx"))
+        adv   = si(regime.get("advance_count")); dec = si(regime.get("decline_count"))
+        breadth50 = regime.get("pct_above_ema50")
 
-        c1,c2,c3,c4,c5,c6 = st.columns(6)
-        ihsg = sf(regime.get("ihsg_close"))
-        chg5 = sf(regime.get("change_5d_pct"))
-        c1.metric("IHSG", f"Rp{ihsg:,.0f}", delta=f"{chg5:+.1f}% (5D)")
-        c2.metric("RSI IHSG", f"{sf(regime.get('ihsg_rsi')):.1f}")
-        c3.metric("ADX IHSG", f"{sf(regime.get('ihsg_adx')):.1f}")
-        adv = si(regime.get("advance_count")); dec = si(regime.get("decline_count"))
-        ad  = adv/dec if dec > 0 else 0
-        c4.metric("A/D Ratio", f"{ad:.2f}", delta=f"{adv}↑ {dec}↓")
-        if sectors:
-            ts = ss(sectors[0].get("sector"),  "-")[:16]
-            bs = ss(sectors[-1].get("sector"), "-")[:16]
-            c5.metric("Sektor Terkuat",  ts, delta=f"{sf(sectors[0].get('return_5d')):+.1f}% 5D")
-            c6.metric("Sektor Terlemah", bs, delta=f"{sf(sectors[-1].get('return_5d')):+.1f}% 5D")
-        else:
-            c5.metric("Sektor Terkuat",  "N/A"); c6.metric("Sektor Terlemah", "N/A")
+        st.markdown(
+            f'<div class="ds-hero">'
+            f'<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px">'
+            f'<div>'
+            f'<div style="font-size:.75rem;color:#9aa4b8;text-transform:uppercase;letter-spacing:.06em">Regime Pasar</div>'
+            f'<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:1.7rem;color:{color};margin-top:2px">{emoji} {r}</div>'
+            f'<div style="color:#9aa4b8;font-size:.85rem;margin-top:4px;max-width:420px">{desc}</div>'
+            f'</div>'
+            f'<div class="ds-num" style="text-align:right">'
+            f'<div style="font-size:.75rem;color:#9aa4b8;text-transform:uppercase;letter-spacing:.06em">IHSG</div>'
+            f'<div style="font-weight:700;font-size:1.6rem;color:#e8ebf2">Rp{ihsg:,.0f}</div>'
+            f'<div style="color:{"#4ade80" if chg5>=0 else "#f87171"};font-size:.85rem;font-weight:600">{chg5:+.1f}% (5D)</div>'
+            f'</div>'
+            f'</div></div>',
+            unsafe_allow_html=True
+        )
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: st.markdown(tile("Market Strength (ADX)", f"{adx:.1f}"), unsafe_allow_html=True)
+        with c2: st.markdown(tile("RSI IHSG", f"{rsi:.1f}"), unsafe_allow_html=True)
+        with c3:
+            ad_ratio = adv/dec if dec>0 else 0
+            st.markdown(tile("Advance/Decline", f"{ad_ratio:.2f}", f"{adv}↑ / {dec}↓"), unsafe_allow_html=True)
+        with c4:
+            bv = f"{sf(breadth50):.0f}%" if breadth50 is not None else "N/A"
+            st.markdown(tile("Breadth (>EMA50)", bv, "% saham di atas EMA50"), unsafe_allow_html=True)
 
         hist = load_regime_history(30)
         if len(hist) >= 5:
@@ -309,55 +583,97 @@ def page_market_overview():
             df_h["regime_date"] = pd.to_datetime(df_h["regime_date"])
             df_h["ihsg_close"]  = df_h["ihsg_close"].apply(sf)
             df_h = df_h.sort_values("regime_date")
-            rc = {"BULL":"#00c853","SIDEWAYS":"#ffd740","BEAR":"#ff5252"}
-            df_h["mcolor"] = df_h["regime"].map(rc).fillna("#888")
+            rc = {"BULL":"#00c896","SIDEWAYS":"#fbbf24","BEAR":"#f87171"}
+            df_h["mcolor"] = df_h["regime"].map(rc).fillna("#9aa4b8")
             fig = go.Figure(go.Scatter(
                 x=df_h["regime_date"], y=df_h["ihsg_close"],
-                mode="lines+markers",
-                line=dict(color="#4488ff", width=2),
-                marker=dict(color=df_h["mcolor"].tolist(), size=9),
+                mode="lines+markers", line=dict(color="#60a5fa", width=2),
+                marker=dict(color=df_h["mcolor"].tolist(), size=8),
                 hovertemplate="<b>%{x|%d %b}</b><br>IHSG: Rp%{y:,.0f}<extra></extra>",
             ))
-            fig.update_layout(title="IHSG 30 Hari (🟢 Bull · 🟡 Sideways · 🔴 Bear)",
-                              height=220, **LAYOUT)
+            fig.update_layout(height=200, **LAYOUT)
             st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("<div class='section-title'>📊 Ringkasan Sinyal Hari Ini</div>", unsafe_allow_html=True)
+    # ── SCANNER SUMMARY ──────────────────────────────────────────
+    section("SCANNER SUMMARY", "🔍")
+    last_run = load_last_scan_run()
+    total_scanned = si(last_run.get("stocks_scanned")) if last_run else len(signals)
+
     sb = sum(1 for s in signals if s.get("signal_type")=="STRONG_BUY")
     bu = sum(1 for s in signals if s.get("signal_type")=="BUY")
     wl = sum(1 for s in signals if s.get("signal_type")=="WATCHLIST")
     av = sum(1 for s in signals if s.get("signal_type")=="AVOID")
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("🚀 Strong Buy", sb); c2.metric("🟢 Buy", bu)
-    c3.metric("👀 Watchlist", wl); c4.metric("🔴 Avoid", av)
 
-    top3 = [s for s in signals if s.get("signal_type") in ("STRONG_BUY","BUY")][:3]
-    if top3:
-        st.markdown("<div class='section-title'>🏆 Top 3 Sinyal</div>", unsafe_allow_html=True)
-        for sig in top3:
-            ticker = ss(sig.get("ticker")).replace(".JK","")
-            score  = sf(sig.get("composite_score"))
-            stype  = ss(sig.get("signal_type"),"AVOID")
-            col = st.columns([1.5,2.5,1.5,2,2])
-            col[0].markdown(f"**{ticker}**")
-            col[1].markdown(signal_badge(stype), unsafe_allow_html=True)
-            col[2].markdown(f"Score **{score:.0f}**")
-            col[3].markdown(fmt_rp(sig.get("close_price")))
-            col[4].markdown(ss(sig.get("sector"),"—")[:18])
-    elif not signals:
-        st.info("Belum ada sinyal hari ini. Scan berjalan ~17:30 WIB setiap hari bursa.")
+    c1,c2,c3,c4,c5 = st.columns(5)
+    with c1: st.markdown(tile("Total Discan", f"{total_scanned:,}"), unsafe_allow_html=True)
+    with c2: st.markdown(tile("🚀 Strong Buy", sb), unsafe_allow_html=True)
+    with c3: st.markdown(tile("🟢 Buy", bu), unsafe_allow_html=True)
+    with c4: st.markdown(tile("👀 Watchlist", wl), unsafe_allow_html=True)
+    with c5: st.markdown(tile("🔴 Rejected", av), unsafe_allow_html=True)
+
+    # ── TOP SIGNALS ──────────────────────────────────────────────
+    section("TOP SIGNALS", "🏆")
+    top5 = [s for s in signals if s.get("signal_type") in ("STRONG_BUY","BUY")][:5]
+    if not top5:
+        st.markdown(
+            '<div class="ds-card">'
+            '<span style="color:#9aa4b8">Belum ada sinyal berkualitas hari ini. '
+            'Menunggu peluang terbaik lebih baik daripada mengambil peluang yang kurang berkualitas.</span>'
+            '</div>', unsafe_allow_html=True
+        )
+    else:
+        rows_html = ""
+        for s in top5:
+            ticker = ss(s.get("ticker")).replace(".JK","")
+            stype  = ss(s.get("signal_type"),"AVOID")
+            score  = sf(s.get("composite_score"))
+            close  = sf(s.get("close_price"))
+            sector = ss(s.get("sector"),"—")
+            conf   = s.get("confidence")
+            rows_html += (
+                f'<div class="ds-row">'
+                f'<div class="ds-row-ticker">{ticker}</div>'
+                f'<div>{signal_badge(stype)}</div>'
+                f'<div style="flex:1"><div class="ds-row-sector">{sector}</div></div>'
+                + (f'<div>{confidence_badge(conf)}</div>' if conf else '')
+                + f'<div class="ds-num" style="font-weight:700;width:70px;text-align:right">{score:.0f}</div>'
+                f'<div class="ds-num" style="width:100px;text-align:right;color:#9aa4b8">Rp{close:,.0f}</div>'
+                f'</div>'
+            )
+        st.markdown(f'<div class="ds-card ds-card-flush">{rows_html}</div>', unsafe_allow_html=True)
+
+    # ── SYSTEM HEALTH (ringkas) ──────────────────────────────────
+    section("SYSTEM HEALTH", "🩺")
+    c1, c2, c3, c4 = st.columns(4)
+    db_ok = load_regime() is not None
+    uni_count = load_universe_count()
+    with c1:
+        dot = "ds-health-ok" if db_ok else "ds-health-bad"
+        st.markdown(f'<div class="ds-health"><span class="ds-health-dot {dot}"></span>Database</div>', unsafe_allow_html=True)
+    with c2:
+        dot = "ds-health-ok" if uni_count > 100 else ("ds-health-warn" if uni_count > 0 else "ds-health-bad")
+        st.markdown(f'<div class="ds-health"><span class="ds-health-dot {dot}"></span>Universe · {uni_count} saham</div>', unsafe_allow_html=True)
+    with c3:
+        ok = last_run and last_run.get("status") == "SUCCESS"
+        dot = "ds-health-ok" if ok else "ds-health-warn"
+        st.markdown(f'<div class="ds-health"><span class="ds-health-dot {dot}"></span>Scan Terakhir</div>', unsafe_allow_html=True)
+    with c4:
+        st.markdown('<div class="ds-health"><span class="ds-health-dot ds-health-ok"></span>Telegram</div>', unsafe_allow_html=True)
 
 
-# ════════ PAGE 2 — TOP SIGNALS ══════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  PAGE — TOP SIGNALS
+# ══════════════════════════════════════════════════════════════════
 
 def page_top_signals():
-    st.title("🚀 Top Signals")
+    st.markdown('<div class="ds-page-title">Top Signals</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ds-page-sub">Sinyal hasil scan, diranking berdasarkan composite score.</div>', unsafe_allow_html=True)
 
-    c1,c2,c3,c4 = st.columns([2,2,2,2])
+    c1,c2,c3,c4 = st.columns([1.3,1.6,1.3,1.6])
     scan_date  = c1.date_input("Tanggal", value=date.today(), max_value=date.today())
-    sig_filter = c2.multiselect("Type", ["STRONG_BUY","BUY","WATCHLIST","AVOID"],
+    sig_filter = c2.multiselect("Tipe Sinyal", ["STRONG_BUY","BUY","WATCHLIST","AVOID"],
                                 default=["STRONG_BUY","BUY"])
-    min_score  = c3.slider("Min Score", 0, 100, 45)
+    min_score  = c3.slider("Skor Minimum", 0, 100, 45)
     search_tk  = c4.text_input("Cari Ticker", placeholder="BBCA")
 
     signals = load_signals(scan_date.isoformat())
@@ -374,109 +690,87 @@ def page_top_signals():
         if search_tk and search_tk.upper() not in ticker.upper(): continue
         entry = sf(s.get("entry_price")) or sf(s.get("close_price"))
         rows.append({
-            "_st": stype, "_sc": score, "_tk": ticker,
-            "Ticker": ticker,
-            "Signal": stype.replace("_"," "),
-            "Score":  score,
-            "Sektor": ss(s.get("sector"),"—")[:18],
-            "Harga":  sf(s.get("close_price")),
-            "Vol x":  sf(s.get("volume_ratio"), 1.0),
-            "RS%":    sf(s.get("rel_strength")),
-            "Entry":  entry,
-            "SL":     sf(s.get("stop_loss")),
-            "TP1":    sf(s.get("target_1")),
-            "R/R":    sf(s.get("risk_reward")),
+            "raw": s, "ticker": ticker, "stype": stype, "score": score,
+            "sector": ss(s.get("sector"),"—"), "close": sf(s.get("close_price")),
+            "vol": sf(s.get("volume_ratio"), 1.0), "rs": sf(s.get("rel_strength")),
+            "entry": entry, "sl": sf(s.get("stop_loss")), "tp1": sf(s.get("target_1")),
+            "rr": sf(s.get("risk_reward")), "conf": s.get("confidence"),
         })
 
     if not rows:
         st.warning("Tidak ada sinyal yang memenuhi filter."); return
 
-    st.caption(f"**{len(rows)}** sinyal · {scan_date}")
-
-    # Header
-    hdr = st.columns([0.4,1.2,2.5,1.8,1.1,0.9,0.9,1.2,1.2,1.2,0.8,0.7])
-    for h,col in zip(["#","Ticker","Signal / Score","Sektor","Harga",
-                       "Vol","RS%","Entry","SL","TP1","R/R",""],hdr):
-        col.markdown(f"<span style='color:#8899bb;font-size:.75rem;font-weight:600'>{h}</span>",
-                     unsafe_allow_html=True)
-    st.markdown("<hr style='margin:3px 0;border-color:#1e3a5f'>", unsafe_allow_html=True)
+    st.markdown(f'<div class="ds-caption">{len(rows)} sinyal ditemukan · {scan_date}</div>', unsafe_allow_html=True)
+    st.write("")
 
     for idx, row in enumerate(rows, 1):
-        score = row["_sc"]; stype = row["_st"]; ticker = row["_tk"]
-        c = st.columns([0.4,1.2,2.5,1.8,1.1,0.9,0.9,1.2,1.2,1.2,0.8,0.7])
-        c[0].markdown(f"<span style='color:#444;font-size:.82rem'>#{idx}</span>",
-                      unsafe_allow_html=True)
-        c[1].markdown(f"**{ticker}**")
-        c[2].markdown(
-            f"{signal_badge(stype)} "
-            f"<b style='color:{score_color(score)}'>&nbsp;{score:.0f}</b><br>"
-            f"{score_bar(score)}",
-            unsafe_allow_html=True)
-        c[3].markdown(f"<span style='font-size:.8rem;color:#8899bb'>{row['Sektor']}</span>",
-                      unsafe_allow_html=True)
-        c[4].markdown(f"Rp{row['Harga']:,.0f}")
-        vr = row["Vol x"]; vc = "#00ff88" if vr>=1.5 else ("#ffd700" if vr>=1 else "#ff6b6b")
-        c[5].markdown(f"<span style='color:{vc}'>{vr:.1f}x</span>", unsafe_allow_html=True)
-        rs = row["RS%"]; rc = "#00ff88" if rs>0 else "#ff6b6b"
-        c[6].markdown(f"<span style='color:{rc}'>{rs:+.1f}%</span>", unsafe_allow_html=True)
-        c[7].markdown(f"Rp{row['Entry']:,.0f}")
-        c[8].markdown(f"<span style='color:#ff6b6b'>Rp{row['SL']:,.0f}</span>",
-                      unsafe_allow_html=True)
-        c[9].markdown(f"<span style='color:#00ff88'>Rp{row['TP1']:,.0f}</span>",
-                      unsafe_allow_html=True)
-        c[10].markdown(f"1:{row['R/R']:.1f}")
-        if c[11].button("Detail", key=f"d_{ticker}_{idx}"):
-            st.session_state["sel_ticker"] = ticker
-            st.session_state["sel_sig"]    = row
-            st.rerun()
-        st.markdown("<hr style='margin:2px 0;border-color:#0d1b2a'>", unsafe_allow_html=True)
+        with st.container():
+            c = st.columns([0.4, 1.1, 1.6, 1.6, 1.5, 0.9, 0.9, 1.1, 1.1, 1.1, 0.8, 0.8])
+            c[0].markdown(f'<span style="color:#5c6478;font-size:.8rem">#{idx}</span>', unsafe_allow_html=True)
+            c[1].markdown(f'<span style="font-weight:700">{row["ticker"]}</span>', unsafe_allow_html=True)
+            c[2].markdown(signal_badge(row["stype"]), unsafe_allow_html=True)
+            if row["conf"]:
+                c[3].markdown(confidence_badge(row["conf"]), unsafe_allow_html=True)
+            else:
+                c[3].markdown(f'<span class="ds-chip">score {row["score"]:.0f}</span>', unsafe_allow_html=True)
+            c[4].markdown(f'<span class="ds-chip">{row["sector"][:16]}</span>', unsafe_allow_html=True)
+            vc = "#4ade80" if row["vol"]>=1.5 else ("#fbbf24" if row["vol"]>=1 else "#f87171")
+            c[5].markdown(f'<span class="ds-num" style="color:{vc}">{row["vol"]:.1f}x</span>', unsafe_allow_html=True)
+            rc = "#4ade80" if row["rs"]>0 else "#f87171"
+            c[6].markdown(f'<span class="ds-num" style="color:{rc}">{row["rs"]:+.1f}%</span>', unsafe_allow_html=True)
+            c[7].markdown(f'<span class="ds-num">Rp{row["entry"]:,.0f}</span>', unsafe_allow_html=True)
+            c[8].markdown(f'<span class="ds-num" style="color:#f87171">Rp{row["sl"]:,.0f}</span>', unsafe_allow_html=True)
+            c[9].markdown(f'<span class="ds-num" style="color:#4ade80">Rp{row["tp1"]:,.0f}</span>', unsafe_allow_html=True)
+            c[10].markdown(f'<span class="ds-num">1:{row["rr"]:.1f}</span>', unsafe_allow_html=True)
+            if c[11].button("→", key=f"d_{row['ticker']}_{idx}", help="Lihat detail"):
+                st.session_state["sel_ticker"] = row["ticker"]
+                st.session_state["nav_override"] = "detail"
+                st.rerun()
+        st.markdown("<hr class='ds-hr' style='margin:4px 0'>", unsafe_allow_html=True)
 
-    export = pd.DataFrame(rows).drop(columns=["_st","_sc","_tk"])
-    st.download_button("⬇️ Download CSV",
-        export.to_csv(index=False).encode(),
+    export = pd.DataFrame([{
+        "Ticker": r["ticker"], "Signal": r["stype"], "Score": r["score"],
+        "Sektor": r["sector"], "Harga": r["close"], "Entry": r["entry"],
+        "SL": r["sl"], "TP1": r["tp1"], "R/R": r["rr"],
+    } for r in rows])
+    st.download_button("⬇ Download CSV", export.to_csv(index=False).encode(),
         file_name=f"daily_signal_{scan_date}.csv", mime="text/csv")
 
 
-# ════════ PAGE 3 — WHY THIS SIGNAL? ═════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  PAGE — SIGNAL DETAIL ("Why This Signal?")
+# ══════════════════════════════════════════════════════════════════
 
-def _interp_trend(score, close, ema20, ema50, ema200):
-    if close > ema20 > ema50 > ema200 > 0:
-        return '<span class="good">Full EMA alignment (close > EMA20 > EMA50 > EMA200)</span> — trend naik sangat kuat.'
-    if close > ema20 > ema50 > 0:
-        return '<span class="good">Harga di atas EMA20 & EMA50</span> — uptrend menengah, belum dikonfirmasi EMA200.'
-    if close > ema20 > 0:
-        return '<span class="warn">Hanya di atas EMA20</span> — trend awal, belum terkonfirmasi jangka menengah.'
-    return '<span class="bad">Harga di bawah EMA20</span> — tidak dalam uptrend.'
+def _build_reasons(sig: dict) -> list[str]:
+    """
+    Susun reason checklist. Prioritas: pakai factor_contribution.highlights
+    dari migration 002 jika ada (sudah dihitung engine, lebih akurat) —
+    fallback ke heuristik sederhana dari kolom lama jika belum tersedia
+    (migration belum jalan), supaya halaman ini tetap berguna.
+    """
+    fc = sig.get("factor_contribution")
+    if isinstance(fc, dict) and fc.get("highlights"):
+        return [f"{h}" for h in fc["highlights"]]
 
-def _interp_momentum(rsi, macd_hist):
-    rsi_txt = (f'<span class="good">RSI {rsi:.0f} (sweet spot 40–65)</span>' if 40<=rsi<=65
-               else f'<span class="warn">RSI {rsi:.0f} (oversold)</span>' if rsi<30
-               else f'<span class="bad">RSI {rsi:.0f} (overbought)</span>')
-    macd_txt = ('<span class="good">MACD Histogram positif</span> — momentum bullish.' if macd_hist>0
-                else '<span class="bad">MACD Histogram negatif</span> — momentum belum bullish.')
-    return f"{rsi_txt}. {macd_txt}"
+    reasons = []
+    trend_score = sf(sig.get("trend_score"))
+    if trend_score >= 24: reasons.append("EMA Bullish Alignment kuat")
+    vr = sf(sig.get("volume_ratio"), 1.0)
+    if vr >= 1.5: reasons.append(f"Volume Spike {vr:.1f}x rata-rata")
+    rs = sf(sig.get("rel_strength"))
+    if rs > 5: reasons.append("Relative Strength tinggi (outperform IHSG)")
+    adx = sf(sig.get("adx"))
+    if adx >= 25: reasons.append(f"ADX kuat ({adx:.0f})")
+    macd_h = sf(sig.get("macd_hist"))
+    if macd_h > 0: reasons.append("MACD momentum positif")
+    if not reasons:
+        reasons.append("Memenuhi ambang skor minimum sistem")
+    return reasons
 
-def _interp_volume(vr):
-    if vr >= 2.0: return f'<span class="good">Volume {vr:.1f}x rata-rata</span> — surge volume, akumulasi kuat.'
-    if vr >= 1.5: return f'<span class="good">Volume {vr:.1f}x rata-rata</span> — di atas normal, konfirmasi valid.'
-    if vr >= 1.0: return f'Volume {vr:.1f}x rata-rata — normal.'
-    return f'<span class="bad">Volume {vr:.1f}x rata-rata</span> — di bawah normal, kurang terpercaya.'
 
-def _interp_strength(adx, rs):
-    adx_txt = (f'<span class="good">ADX {adx:.0f} — trend kuat</span>' if adx>=25
-               else f'<span class="warn">ADX {adx:.0f} — trend lemah</span>')
-    rs_txt  = (f'<span class="good">RS vs IHSG {rs:+.1f}% — outperform</span>' if rs>5
-               else f'<span class="bad">RS vs IHSG {rs:+.1f}% — underperform</span>' if rs<0
-               else f'RS vs IHSG {rs:+.1f}%')
-    return f"{adx_txt}. {rs_txt}."
-
-def _interp_volatility(atr_pct):
-    if 1.0 <= atr_pct <= 4.0: return f'<span class="good">ATR {atr_pct:.1f}%</span> — volatilitas ideal untuk swing trading.'
-    if atr_pct < 1.0:          return f'<span class="warn">ATR {atr_pct:.1f}%</span> — terlalu stabil, potensi profit terbatas.'
-    return                       f'<span class="warn">ATR {atr_pct:.1f}%</span> — volatilitas tinggi, gunakan position size lebih kecil.'
-
-def page_why_this_signal():
-    st.title("🔍 Why This Signal?")
+def page_signal_detail():
+    st.markdown('<div class="ds-page-title">Signal Detail</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ds-page-sub">Kenapa saham ini terpilih — breakdown lengkap.</div>', unsafe_allow_html=True)
 
     signals = load_signals()
     actionable = [s for s in signals if s.get("signal_type") in ("STRONG_BUY","BUY","WATCHLIST")]
@@ -488,28 +782,39 @@ def page_why_this_signal():
     if "sel_ticker" in st.session_state and st.session_state["sel_ticker"] in tickers:
         def_idx = tickers.index(st.session_state["sel_ticker"])
 
-    selected = st.selectbox("Pilih Ticker:", tickers, index=def_idx)
+    selected = st.selectbox("Pilih Ticker", tickers, index=def_idx)
     sig = next((s for s in actionable if ss(s.get("ticker")).replace(".JK","")==selected), None)
     if not sig:
         st.warning("Data tidak ditemukan."); return
 
     stype  = ss(sig.get("signal_type"),"AVOID")
     score  = sf(sig.get("composite_score"))
+    raw    = sig.get("raw_score")
     close  = sf(sig.get("close_price"))
     sector = ss(sig.get("sector"),"—")
-    color  = score_color(score)
+    conf   = sig.get("confidence")
 
-    c1,c2,c3 = st.columns([2,2,3])
-    c1.markdown(f"## {selected}")
-    c1.markdown(signal_badge(stype), unsafe_allow_html=True)
-    c2.metric("Composite Score", f"{score:.1f}/100")
-    c2.metric("Harga", fmt_rp(close))
-    c3.metric("Sektor", sector)
-    c3.metric("Tanggal", ss(sig.get("signal_date")))
-    st.divider()
+    # ── Header hero ──────────────────────────────────────────────
+    st.markdown(
+        f'<div class="ds-hero">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px">'
+        f'<div>'
+        f'<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:1.8rem;color:#e8ebf2">{selected}</div>'
+        f'<div style="margin-top:6px;display:flex;gap:8px;align-items:center">{signal_badge(stype)}'
+        + (confidence_badge(conf) if conf else '') +
+        f'<span class="ds-chip">{sector}</span></div>'
+        f'</div>'
+        f'<div class="ds-num" style="text-align:right">'
+        f'<div style="font-size:.75rem;color:#9aa4b8;text-transform:uppercase">Harga</div>'
+        f'<div style="font-weight:700;font-size:1.5rem;color:#e8ebf2">Rp{close:,.0f}</div>'
+        f'<div style="font-size:.8rem;color:#9aa4b8">Score {score:.0f}/100'
+        + (f' · raw {sf(raw):.0f}' if raw is not None else '') + '</div>'
+        f'</div></div></div>',
+        unsafe_allow_html=True
+    )
 
-    # Score breakdown bar chart
-    st.markdown("<div class='section-title'>📊 Score Breakdown</div>", unsafe_allow_html=True)
+    # ── Score Breakdown ──────────────────────────────────────────
+    section("SCORE BREAKDOWN", "📊")
     comps = [
         ("Trend",      sf(sig.get("trend_score")),      30),
         ("Momentum",   sf(sig.get("momentum_score")),   25),
@@ -517,87 +822,88 @@ def page_why_this_signal():
         ("Strength",   sf(sig.get("strength_score")),   15),
         ("Volatility", sf(sig.get("volatility_score")), 10),
     ]
-    fig_g = go.Figure()
-    for name, val, mx in comps:
-        pct = val/mx*100 if mx>0 else 0
-        fig_g.add_trace(go.Bar(name=name, x=[val], y=[name], orientation="h",
-                               marker_color=score_color(pct),
-                               text=f"{val:.0f}/{mx}", textposition="outside"))
-        fig_g.add_trace(go.Bar(name=f"_{name}", x=[mx-val], y=[name], orientation="h",
-                               marker_color="#1a2744", showlegend=False))
-    fig_g.update_layout(barmode="stack", height=260,
-                        margin=dict(l=0,r=60,t=10,b=0),
-                        paper_bgcolor=DARK_BG, plot_bgcolor=DARK_BG, showlegend=False,
-                        xaxis=dict(range=[0,36], showgrid=False, showticklabels=False),
-                        yaxis=dict(autorange="reversed"))
-    st.plotly_chart(fig_g, use_container_width=True)
+    sector_bonus = sig.get("sector_bonus")
 
-    # Indicators
-    st.markdown("<div class='section-title'>📈 Indikator Detail</div>", unsafe_allow_html=True)
+    gauges_html = "".join(gauge_row(name, val, mx) for name, val, mx in comps)
+    if sector_bonus is not None:
+        sb = sf(sector_bonus)
+        sb_color = "#4ade80" if sb > 0 else ("#f87171" if sb < 0 else "#5c6478")
+        gauges_html += (
+            f'<div class="ds-gauge-row">'
+            f'<div class="ds-gauge-label">Sector Bonus</div>'
+            f'<div class="ds-gauge-track"></div>'
+            f'<div class="ds-gauge-val" style="color:{sb_color}">{sb:+.0f}</div>'
+            f'</div>'
+        )
+    st.markdown(f'<div class="ds-card">{gauges_html}</div>', unsafe_allow_html=True)
+
+    # ── Mengapa saham ini dipilih ────────────────────────────────
+    section("MENGAPA SAHAM INI DIPILIH?", "✓")
+    reasons = _build_reasons(sig)
+    reasons_html = "".join(
+        f'<div class="ds-reason"><span class="ds-reason-check">✓</span>{r}</div>' for r in reasons
+    )
+    st.markdown(f'<div class="ds-card">{reasons_html}</div>', unsafe_allow_html=True)
+
+    # ── Indikator Detail ─────────────────────────────────────────
+    section("INDIKATOR TEKNIKAL", "📈")
     ema20  = sf(sig.get("ema20")); ema50  = sf(sig.get("ema50")); ema200 = sf(sig.get("ema200"))
     rsi    = sf(sig.get("rsi"), 50); macd_h = sf(sig.get("macd_hist"))
     adx    = sf(sig.get("adx")); vr = sf(sig.get("volume_ratio"), 1.0); rs = sf(sig.get("rel_strength"))
     atr    = sf(sig.get("atr")); atr_pct = atr/close*100 if close>0 else 0
 
     c1,c2,c3,c4 = st.columns(4)
-    c1.metric("EMA 20",  fmt_rp(ema20))
-    c1.metric("EMA 50",  fmt_rp(ema50))
-    c1.metric("EMA 200", fmt_rp(ema200) if ema200>0 else "N/A")
-    c2.metric("RSI (14)", f"{rsi:.1f}")
-    c2.metric("MACD Hist", f"{macd_h:+.4f}")
-    c2.metric("ADX (14)", f"{adx:.1f}")
-    c3.metric("Volume Ratio", f"{vr:.2f}x")
-    c3.metric("RS vs IHSG",   f"{rs:+.1f}%")
-    c3.metric("ATR%",         f"{atr_pct:.2f}%")
+    with c1:
+        st.markdown(tile("EMA 20", fmt_rp(ema20)), unsafe_allow_html=True)
+        st.write("")
+        st.markdown(tile("EMA 50", fmt_rp(ema50)), unsafe_allow_html=True)
+    with c2:
+        st.markdown(tile("RSI (14)", f"{rsi:.1f}"), unsafe_allow_html=True)
+        st.write("")
+        st.markdown(tile("MACD Hist", f"{macd_h:+.4f}"), unsafe_allow_html=True)
+    with c3:
+        st.markdown(tile("ADX (14)", f"{adx:.1f}"), unsafe_allow_html=True)
+        st.write("")
+        st.markdown(tile("Volume Ratio", f"{vr:.2f}x"), unsafe_allow_html=True)
+    with c4:
+        st.markdown(tile("RS vs IHSG", f"{rs:+.1f}%"), unsafe_allow_html=True)
+        st.write("")
+        st.markdown(tile("ATR%", f"{atr_pct:.2f}%"), unsafe_allow_html=True)
+
+    # ── Risk Management ──────────────────────────────────────────
+    section("RISK MANAGEMENT", "⚖️")
     entry = sf(sig.get("entry_price")) or close
     sl    = sf(sig.get("stop_loss")); tp1 = sf(sig.get("target_1")); tp2 = sf(sig.get("target_2"))
     rr    = sf(sig.get("risk_reward"))
-    c4.metric("Entry",   fmt_rp(entry))
-    c4.metric("Stop Loss", fmt_rp(sl))
-    c4.metric("Target 1",  fmt_rp(tp1))
-
-    # Interpretations
-    st.markdown("<div class='section-title'>💡 Interpretasi Otomatis</div>", unsafe_allow_html=True)
-    interps = [
-        ("📈 Trend",      _interp_trend(sf(sig.get("trend_score")), close, ema20, ema50, ema200)),
-        ("⚡ Momentum",   _interp_momentum(rsi, macd_h)),
-        ("📊 Volume",     _interp_volume(vr)),
-        ("💪 Strength",   _interp_strength(adx, rs)),
-        ("🌀 Volatility", _interp_volatility(atr_pct)),
-    ]
-    for title, text in interps:
-        st.markdown(
-            f"<div class='info-box'><b>{title}</b><br>"
-            f"<span class='interp'>{text}</span></div>",
-            unsafe_allow_html=True)
-
-    # Risk
-    st.markdown("<div class='section-title'>⚖️ Risk Management</div>", unsafe_allow_html=True)
+    pos_risk = sig.get("position_risk")
     sl_pct  = (sl/entry-1)*100  if entry>0 else 0
     tp1_pct = (tp1/entry-1)*100 if entry>0 else 0
     tp2_pct = (tp2/entry-1)*100 if entry>0 else 0
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Entry",   fmt_rp(entry))
-    c2.metric("Stop Loss",fmt_rp(sl),  delta=f"{sl_pct:.1f}%")
-    c3.metric("Target 1", fmt_rp(tp1), delta=f"+{tp1_pct:.1f}%")
-    c4.metric("Target 2", fmt_rp(tp2), delta=f"+{tp2_pct:.1f}%")
-    st.markdown(
-        f"<div class='info-box'><b>Risk/Reward: 1:{rr:.1f}</b> | "
-        f"Risiko: {abs(sl_pct):.1f}% dari entry</div>",
-        unsafe_allow_html=True)
+
+    c1,c2,c3,c4,c5 = st.columns(5)
+    with c1: st.markdown(tile("Entry", fmt_rp(entry)), unsafe_allow_html=True)
+    with c2: st.markdown(tile("Stop Loss", fmt_rp(sl), f"{sl_pct:.1f}%", "down"), unsafe_allow_html=True)
+    with c3: st.markdown(tile("Target 1", fmt_rp(tp1), f"+{tp1_pct:.1f}%", "up"), unsafe_allow_html=True)
+    with c4: st.markdown(tile("Target 2", fmt_rp(tp2), f"+{tp2_pct:.1f}%", "up"), unsafe_allow_html=True)
+    with c5:
+        ps = f"{sf(pos_risk):.1f}%" if pos_risk is not None else f"1:{rr:.1f}"
+        st.markdown(tile("Risk/Reward", f"1:{rr:.1f}"), unsafe_allow_html=True)
 
 
-# ════════ PAGE 4 — HISTORICAL SIGNALS ═══════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  PAGE — HISTORICAL SIGNALS
+# ══════════════════════════════════════════════════════════════════
 
 def page_historical_signals():
-    st.title("📅 Historical Signals")
+    st.markdown('<div class="ds-page-title">Historical Signals</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ds-page-sub">Evaluasi kualitas sinyal dari waktu ke waktu.</div>', unsafe_allow_html=True)
 
     c1,c2,c3,c4 = st.columns(4)
     days_back = c1.selectbox("Periode", [7,14,30,60,90], index=2)
-    tf        = c2.multiselect("Type", ["STRONG_BUY","BUY","WATCHLIST"],
+    tf        = c2.multiselect("Tipe", ["STRONG_BUY","BUY","WATCHLIST"],
                                default=["STRONG_BUY","BUY"])
     search    = c3.text_input("Cari Ticker", placeholder="BBCA")
-    min_s     = c4.slider("Min Score", 0, 100, 45, key="hs")
+    min_s     = c4.slider("Skor Minimum", 0, 100, 45, key="hs")
 
     signals = load_signals_range(days_back)
     if not signals:
@@ -608,7 +914,7 @@ def page_historical_signals():
                 and sf(s.get("composite_score")) >= min_s
                 and (not search or search.upper() in ss(s.get("ticker")).upper())]
 
-    st.caption(f"**{len(filtered)}** dari {len(signals)} sinyal · {days_back} hari terakhir")
+    st.markdown(f'<div class="ds-caption">{len(filtered)} dari {len(signals)} sinyal · {days_back} hari terakhir</div>', unsafe_allow_html=True)
     if not filtered:
         st.warning("Tidak ada sinyal yang memenuhi filter."); return
 
@@ -633,81 +939,84 @@ def page_historical_signals():
 
     def cs(v):
         if isinstance(v, str):
-            return {"STRONG BUY":"color:#00c853;font-weight:700","BUY":"color:#69f0ae;font-weight:700",
-                    "WATCHLIST":"color:#ffd740"}.get(v,"")
+            return {"STRONG BUY":"color:#00c896;font-weight:700","BUY":"color:#4ade80;font-weight:700",
+                    "WATCHLIST":"color:#fbbf24"}.get(v,"")
         if isinstance(v, float):
-            if v>=75: return "background-color:#003820;color:#00ff88"
-            if v>=60: return "background-color:#002a1a;color:#69f0ae"
-            if v>=45: return "background-color:#2a2000;color:#ffd740"
-            return "background-color:#2a0000;color:#ff5252"
+            if v>=75: return "background-color:rgba(0,200,150,.1);color:#00c896"
+            if v>=60: return "background-color:rgba(74,222,128,.1);color:#4ade80"
+            if v>=45: return "background-color:rgba(251,191,36,.1);color:#fbbf24"
+            return "background-color:rgba(248,113,113,.1);color:#f87171"
         return ""
 
-    styled = (df.style
-              .applymap(cs, subset=["Type","Score"])
-              .format({"Score":"{:.1f}","Close":"Rp{:,.0f}","Entry":"Rp{:,.0f}",
+    styled = _styler_apply(df.style, cs, subset=["Type","Score"])
+    styled = styled.format({"Score":"{:.1f}","Close":"Rp{:,.0f}","Entry":"Rp{:,.0f}",
                        "SL":"Rp{:,.0f}","TP1":"Rp{:,.0f}",
-                       "R/R":"1:{:.1f}","RSI":"{:.1f}","Vol x":"{:.1f}x"}))
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=480)
+                       "R/R":"1:{:.1f}","RSI":"{:.1f}","Vol x":"{:.1f}x"})
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=440)
 
     c1,c2 = st.columns(2)
     with c1:
         tc = df["Type"].value_counts()
         fig = go.Figure(go.Pie(labels=tc.index.tolist(), values=tc.values.tolist(),
-                               marker_colors=["#00c853","#69f0ae","#ffd740","#ff5252"],
-                               hole=0.4))
-        fig.update_layout(title="Distribusi Tipe", height=260, paper_bgcolor=DARK_BG)
+                               marker_colors=["#00c896","#4ade80","#fbbf24","#f87171"],
+                               hole=0.55))
+        fig.update_layout(title="Distribusi Tipe Sinyal", height=260, **LAYOUT)
         st.plotly_chart(fig, use_container_width=True)
     with c2:
         sc = df["Sektor"].value_counts().head(8)
         fig = px.bar(x=sc.values, y=sc.index, orientation="h", title="Sinyal per Sektor",
-                     color=sc.values, color_continuous_scale=["#1e3a5f","#00c853"])
-        fig.update_layout(height=260, showlegend=False, coloraxis_showscale=False,
-                          paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG)
+                     color=sc.values, color_continuous_scale=["#171d2c","#00c896"])
+        fig.update_layout(height=260, showlegend=False, coloraxis_showscale=False, **LAYOUT)
         st.plotly_chart(fig, use_container_width=True)
 
-    st.download_button("⬇️ Download CSV", df.to_csv(index=False).encode(),
+    st.download_button("⬇ Download CSV", df.to_csv(index=False).encode(),
                        file_name=f"hist_signals_{days_back}d.csv", mime="text/csv")
 
 
-# ════════ PAGE 5 — SIGNAL PERFORMANCE ═══════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  PAGE — SIGNAL PERFORMANCE
+# ══════════════════════════════════════════════════════════════════
 
 def page_signal_performance():
-    st.title("📊 Signal Performance")
+    st.markdown('<div class="ds-page-title">Signal Performance</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ds-page-sub">Apakah sistem ini benar-benar bekerja?</div>', unsafe_allow_html=True)
 
     stats   = load_portfolio_stats()
     closed  = load_closed_positions(200)
     equity  = load_equity_curve()
     bt      = load_backtests()
 
-    st.markdown("<div class='section-title'>📈 KPI Utama</div>", unsafe_allow_html=True)
+    section("KPI UTAMA", "📈")
     if stats and stats.total_trades > 0:
         wr = sf(stats.win_rate)
         pf = sf(stats.profit_factor)
         c1,c2,c3,c4,c5,c6 = st.columns(6)
-        c1.metric("Total Trades",  si(stats.total_trades))
-        c2.metric("Win Rate",      f"{wr:.1%}",  delta="OK ✓" if wr>=0.55 else "⚠ <55%")
-        c3.metric("Profit Factor", f"{pf:.2f}",  delta="OK ✓" if pf>1 else "⚠ <1.0")
-        c4.metric("Expectancy",    f"{sf(stats.expectancy):+.2f}%")
-        c5.metric("Avg Gain",      f"{sf(stats.avg_gain_pct):+.2f}%")
-        c6.metric("Max Drawdown",  f"{sf(stats.max_drawdown_pct):.1f}%")
+        with c1: st.markdown(tile("Total Trades", si(stats.total_trades)), unsafe_allow_html=True)
+        with c2: st.markdown(tile("Win Rate", f"{wr:.1%}", "OK ✓" if wr>=0.55 else "< 55%", "up" if wr>=0.55 else "down"), unsafe_allow_html=True)
+        with c3: st.markdown(tile("Profit Factor", f"{pf:.2f}", "OK ✓" if pf>1 else "< 1.0", "up" if pf>1 else "down"), unsafe_allow_html=True)
+        with c4: st.markdown(tile("Expectancy", f"{sf(stats.expectancy):+.2f}%"), unsafe_allow_html=True)
+        with c5: st.markdown(tile("Avg Gain", f"{sf(stats.avg_gain_pct):+.2f}%"), unsafe_allow_html=True)
+        with c6: st.markdown(tile("Max Drawdown", f"{sf(stats.max_drawdown_pct):.1f}%"), unsafe_allow_html=True)
     else:
-        st.info("Belum ada trade selesai.")
+        st.info("Belum ada trade selesai — statistik akan muncul setelah posisi ditutup.")
 
     if equity:
-        st.markdown("<div class='section-title'>📈 Equity Curve</div>", unsafe_allow_html=True)
+        section("EQUITY CURVE", "💹")
         df_e = pd.DataFrame(equity)
         df_e["snapshot_date"] = pd.to_datetime(df_e["snapshot_date"])
         df_e["total_equity"]  = df_e["total_equity"].apply(sf)
         fig = go.Figure(go.Scatter(
             x=df_e["snapshot_date"], y=df_e["total_equity"],
-            mode="lines", line=dict(color="#00ff88", width=2),
-            fill="tozeroy", fillcolor="rgba(0,255,136,0.08)",
+            mode="lines", line=dict(color="#00c896", width=2),
+            fill="tozeroy", fillcolor="rgba(0,200,150,.08)",
             hovertemplate="<b>%{x|%d %b}</b><br>Rp%{y:,.0f}<extra></extra>"))
-        fig.update_layout(height=280, **LAYOUT, yaxis=dict(gridcolor=GRID, tickformat=",.0f"))
+        fig.update_layout(height=280, paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG,
+                          font=LAYOUT["font"], margin=LAYOUT["margin"], xaxis=LAYOUT["xaxis"],
+                          yaxis=dict(gridcolor=GRID, tickformat=",.0f"))
         st.plotly_chart(fig, use_container_width=True)
 
     if closed:
-        st.markdown("<div class='section-title'>📊 Analisis Trade</div>", unsafe_allow_html=True)
+        section("ANALISIS TRADE", "🔬")
         df_c = pd.DataFrame(closed)
         df_c["return_pct"] = df_c["return_pct"].apply(lambda x: sf(x)*100)
         df_c["net_pnl"]    = df_c["net_pnl"].apply(sf)
@@ -716,41 +1025,36 @@ def page_signal_performance():
         with c1:
             wins = len(df_c[df_c["net_pnl"]>0]); losses = len(df_c[df_c["net_pnl"]<=0])
             fig = go.Figure(go.Pie(labels=["Win","Loss"], values=[wins,losses],
-                                  marker_colors=["#00c853","#ff5252"], hole=0.5,
+                                  marker_colors=["#00c896","#f87171"], hole=0.6,
                                   textinfo="label+percent"))
-            fig.update_layout(title="Win / Loss", height=250,
-                              paper_bgcolor=DARK_BG, showlegend=False)
+            fig.update_layout(title="Win / Loss", height=250, **LAYOUT, showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
         with c2:
             fig = px.histogram(df_c, x="return_pct", nbins=20,
                                title="Distribusi Return (%)",
-                               color_discrete_sequence=["#4488ff"])
-            fig.update_layout(height=250, paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG)
+                               color_discrete_sequence=["#60a5fa"])
+            fig.update_layout(height=250, **LAYOUT)
             st.plotly_chart(fig, use_container_width=True)
         with c3:
             if "exit_date" in df_c.columns:
-                df_c["month"] = pd.to_datetime(df_c["exit_date"], errors="coerce")\
-                                  .dt.strftime("%Y-%m")
+                df_c["month"] = pd.to_datetime(df_c["exit_date"], errors="coerce").dt.strftime("%Y-%m")
                 mo = df_c.groupby("month")["net_pnl"].sum().reset_index()
-                mo["color"] = mo["net_pnl"].apply(lambda x: "#00c853" if x>=0 else "#ff5252")
-                fig = go.Figure(go.Bar(x=mo["month"], y=mo["net_pnl"],
-                                       marker_color=mo["color"],
-                                       text=mo["net_pnl"].apply(lambda x: f"Rp{x:,.0f}"),
-                                       textposition="outside"))
-                fig.update_layout(title="PnL per Bulan", height=250,
-                                  paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG)
+                mo["color"] = mo["net_pnl"].apply(lambda x: "#00c896" if x>=0 else "#f87171")
+                fig = go.Figure(go.Bar(x=mo["month"], y=mo["net_pnl"], marker_color=mo["color"],
+                                       text=mo["net_pnl"].apply(lambda x: f"Rp{x:,.0f}"), textposition="outside"))
+                fig.update_layout(title="PnL per Bulan", height=250, **LAYOUT)
                 st.plotly_chart(fig, use_container_width=True)
 
     if bt:
-        st.markdown("<div class='section-title'>🔬 Backtest Summary</div>", unsafe_allow_html=True)
+        section("BACKTEST SUMMARY", "🧪")
         df_bt = pd.DataFrame(bt)
         for col in ["win_rate","profit_factor","sharpe_ratio","max_drawdown","expectancy"]:
             if col in df_bt.columns:
                 df_bt[col] = df_bt[col].apply(sf)
         c1,c2,c3 = st.columns(3)
-        c1.metric("Saham Dibacktest", len(df_bt))
-        c2.metric("Avg Win Rate",     f"{df_bt['win_rate'].mean():.1%}")
-        c3.metric("Avg Sharpe",       f"{df_bt['sharpe_ratio'].mean():.2f}")
+        with c1: st.markdown(tile("Saham Dibacktest", len(df_bt)), unsafe_allow_html=True)
+        with c2: st.markdown(tile("Avg Win Rate", f"{df_bt['win_rate'].mean():.1%}"), unsafe_allow_html=True)
+        with c3: st.markdown(tile("Avg Sharpe", f"{df_bt['sharpe_ratio'].mean():.2f}"), unsafe_allow_html=True)
 
         top = df_bt.nlargest(10, "win_rate")[
             ["ticker","total_trades","win_rate","profit_factor",
@@ -768,10 +1072,14 @@ def page_signal_performance():
         st.info("Backtest berjalan otomatis setiap Sabtu pagi.")
 
 
-# ════════ PAGE 6 — SECTOR ROTATION ══════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  PAGE — SECTOR ROTATION
+# ══════════════════════════════════════════════════════════════════
 
 def page_sector_rotation():
-    st.title("🏭 Sector Rotation")
+    st.markdown('<div class="ds-page-title">Sector Rotation</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ds-page-sub">Sektor mana yang sedang memimpin momentum pasar.</div>', unsafe_allow_html=True)
+
     sectors = load_sectors()
     if not sectors:
         st.info("Data sektor belum tersedia. Tersedia setelah scan pertama."); return
@@ -781,10 +1089,9 @@ def page_sector_rotation():
                 "momentum_score","breadth_score","rank_position"]:
         if col in df.columns:
             df[col] = df[col].apply(sf)
-
     df = df.sort_values("composite_score", ascending=False).reset_index(drop=True)
 
-    st.markdown("<div class='section-title'>🏆 Sector Leaderboard</div>", unsafe_allow_html=True)
+    section("SECTOR LEADERBOARD", "🏆")
     for i, row in df.iterrows():
         rank   = i+1
         sector = ss(row.get("sector"),"—")
@@ -792,81 +1099,95 @@ def page_sector_rotation():
         r5d    = sf(row.get("return_5d")); r1d = sf(row.get("return_1d"))
         trend  = ss(row.get("trend"),"STABLE")
         breadth= sf(row.get("breadth_score"))
-        te     = {"RISING":"⬆️","STABLE":"➡️","FALLING":"⬇️"}.get(trend,"➡️")
-        medal  = {1:"🥇",2:"🥈",3:"🥉"}.get(rank,f"#{rank}")
-        c1,c2,c3,c4,c5,c6 = st.columns([0.5,2.5,3,1,1,1])
-        c1.markdown(f"**{medal}**")
-        c2.markdown(f"**{sector}** {te}")
-        c3.markdown(
-            f'{score_bar(score)}'
-            f'<span style="color:{score_color(score)};font-size:.8rem"> {score:.1f}</span>',
-            unsafe_allow_html=True)
-        r5c = "#00ff88" if r5d>0 else "#ff5252"
-        r1c = "#00ff88" if r1d>0 else "#ff5252"
-        c4.markdown(f"<span style='color:{r5c}'>{r5d:+.1f}% 5D</span>", unsafe_allow_html=True)
-        c5.markdown(f"<span style='color:{r1c}'>{r1d:+.1f}% 1D</span>", unsafe_allow_html=True)
-        c6.markdown(f"Breadth {breadth:.0f}%")
+        te     = {"RISING":"⬆","STABLE":"→","FALLING":"⬇"}.get(trend,"→")
+        medal  = {1:"🥇",2:"🥈",3:"🥉"}.get(rank, f"#{rank}")
+        r5c = "#4ade80" if r5d>0 else "#f87171"
+        r1c = "#4ade80" if r1d>0 else "#f87171"
 
-    st.markdown("<hr style='border-color:#1e3a5f'>", unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="ds-card" style="padding:14px 20px;margin-bottom:8px">'
+            f'<div style="display:flex;align-items:center;gap:14px">'
+            f'<div style="width:32px;font-size:1.1rem">{medal}</div>'
+            f'<div style="width:190px;font-weight:700">{sector} <span style="color:#9aa4b8;font-weight:400">{te}</span></div>'
+            f'<div style="flex:1">{gauge_row("", score, 100)}</div>'
+            f'<div class="ds-num" style="width:80px;text-align:right;color:{r5c}">{r5d:+.1f}% 5D</div>'
+            f'<div class="ds-num" style="width:80px;text-align:right;color:{r1c}">{r1d:+.1f}% 1D</div>'
+            f'<div class="ds-num" style="width:90px;text-align:right;color:#9aa4b8">Breadth {breadth:.0f}%</div>'
+            f'</div></div>',
+            unsafe_allow_html=True
+        )
 
     c1,c2 = st.columns(2)
     with c1:
         fig = go.Figure(go.Bar(
             x=df["composite_score"], y=df["sector"], orientation="h",
             marker_color=[score_color(s) for s in df["composite_score"]],
-            text=df["composite_score"].apply(lambda x: f"{x:.1f}"),
-            textposition="outside"))
-        fig.update_layout(title="Composite Score", height=380,
-                          margin=dict(l=0,r=60,t=30,b=0),
-                          paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG,
-                          xaxis=dict(range=[0,110], showgrid=False),
-                          yaxis=dict(autorange="reversed"))
+            text=df["composite_score"].apply(lambda x: f"{x:.1f}"), textposition="outside"))
+        fig.update_layout(title="Composite Score per Sektor", height=380,
+                          margin=dict(l=0,r=60,t=30,b=0), paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG,
+                          font=LAYOUT["font"],
+                          xaxis=dict(range=[0,110], showgrid=False), yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig, use_container_width=True)
     with c2:
         if all(c in df.columns for c in ["return_1d","return_5d","return_20d"]):
             mat = df[["return_1d","return_5d","return_20d"]].values
             fig = go.Figure(go.Heatmap(
                 z=mat, x=["1D","5D","20D"], y=df["sector"].tolist(),
-                colorscale=[[0,"#ff5252"],[0.5,"#1a2744"],[1,"#00c853"]], zmid=0,
-                text=[[f"{v:+.1f}%" for v in row] for row in mat],
+                colorscale=[[0,"#f87171"],[0.5,"#171d2c"],[1,"#00c896"]], zmid=0,
+                text=[[f"{v:+.1f}%" for v in r] for r in mat],
                 texttemplate="%{text}", textfont=dict(size=11)))
             fig.update_layout(title="Return Heatmap", height=380,
-                              margin=dict(l=0,r=0,t=30,b=0),
-                              paper_bgcolor=DARK_BG)
+                              margin=dict(l=0,r=0,t=30,b=0), paper_bgcolor=DARK_BG, font=LAYOUT["font"])
             st.plotly_chart(fig, use_container_width=True)
 
     if "momentum_score" in df.columns and "breadth_score" in df.columns:
-        st.markdown("<div class='section-title'>📡 Momentum vs Breadth</div>", unsafe_allow_html=True)
+        section("MOMENTUM VS BREADTH", "📡")
         fig = px.scatter(df, x="momentum_score", y="breadth_score",
                          size="composite_score", color="composite_score",
-                         color_continuous_scale=["#ff5252","#ffd740","#00c853"],
-                         text="sector",
-                         title="Momentum Score vs Breadth Score")
+                         color_continuous_scale=["#f87171","#fbbf24","#00c896"],
+                         text="sector")
         fig.update_traces(textposition="top center", textfont_size=10)
-        fig.update_layout(height=380, paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG,
-                          coloraxis_showscale=False)
+        fig.update_layout(height=380, **LAYOUT, coloraxis_showscale=False)
         st.plotly_chart(fig, use_container_width=True)
 
 
-# ════════ PAGE 7 — PORTFOLIO ═════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  PAGE — PORTFOLIO
+# ══════════════════════════════════════════════════════════════════
 
 def page_portfolio():
-    st.title("💼 Portfolio")
+    st.markdown('<div class="ds-page-title">Portfolio</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ds-page-sub">Ringkasan posisi dan performa trading Anda.</div>', unsafe_allow_html=True)
+
     stats   = load_portfolio_stats()
     open_pos = load_open_positions()
+    closed   = load_closed_positions(500)
 
+    section("PORTFOLIO SUMMARY", "💼")
     if stats:
         c1,c2,c3,c4,c5 = st.columns(5)
-        c1.metric("Posisi Aktif", si(stats.num_open_positions))
-        c2.metric("Total Invested", fmt_rp(stats.total_invested))
+        with c1: st.markdown(tile("Posisi Aktif", si(stats.num_open_positions)), unsafe_allow_html=True)
+        with c2: st.markdown(tile("Total Invested", fmt_rp(stats.total_invested)), unsafe_allow_html=True)
         inv  = sf(stats.total_invested); upnl = sf(stats.total_unrealized_pnl)
         dpct = f"{upnl/inv*100:.1f}%" if inv>0 else "0%"
-        c3.metric("Unrealized PnL", fmt_rp(upnl), delta=dpct)
-        c4.metric("Realized PnL",   fmt_rp(stats.total_realized_pnl))
-        c5.metric("Win Rate", f"{sf(stats.win_rate):.1%}" if stats.total_trades>0 else "N/A")
+        with c3: st.markdown(tile("Unrealized PnL", fmt_rp(upnl), dpct, "up" if upnl>=0 else "down"), unsafe_allow_html=True)
+        with c4: st.markdown(tile("Realized PnL", fmt_rp(stats.total_realized_pnl)), unsafe_allow_html=True)
+        with c5:
+            wr_txt = f"{sf(stats.win_rate):.1%}" if stats.total_trades>0 else "N/A"
+            st.markdown(tile("Win Rate", wr_txt), unsafe_allow_html=True)
 
-    st.divider()
-    st.subheader("📂 Posisi Aktif")
+    if closed:
+        avg_hold = None
+        try:
+            df_hold = pd.DataFrame(closed)
+            if "holding_days" in df_hold.columns:
+                avg_hold = df_hold["holding_days"].apply(sf).mean()
+        except Exception:
+            pass
+        if avg_hold is not None:
+            st.markdown(tile("Avg Holding Time", f"{avg_hold:.0f} hari"), unsafe_allow_html=True)
+
+    section("OPEN POSITIONS", "📂")
     if not open_pos:
         st.info("Belum ada posisi aktif.")
     else:
@@ -884,14 +1205,25 @@ def page_portfolio():
         df = pd.DataFrame(rows)
         def cpnl(v):
             if isinstance(v, float):
-                return "color:#00c853;font-weight:700" if v>=0 else "color:#ff5252;font-weight:700"
+                return "color:#00c896;font-weight:700" if v>=0 else "color:#f87171;font-weight:700"
             return ""
-        styled = df.style.applymap(cpnl, subset=["Unrealized","Return %"])\
-                         .format({"Entry":"Rp{:,.0f}","Harga Kini":"Rp{:,.0f}",
+        styled = _styler_apply(df.style, cpnl, subset=["Unrealized","Return %"])
+        styled = styled.format({"Entry":"Rp{:,.0f}","Harga Kini":"Rp{:,.0f}",
                                   "Unrealized":"Rp{:,.0f}","Return %":"{:+.2f}%"})
         st.dataframe(styled, use_container_width=True, hide_index=True)
 
-    st.divider()
+    if closed:
+        section("CLOSED POSITIONS", "📁")
+        df_c = pd.DataFrame(closed[:50])
+        show_cols = [c for c in ["ticker","entry_date","exit_date","entry_price","exit_price",
+                                  "net_pnl","return_pct","exit_reason"] if c in df_c.columns]
+        if show_cols:
+            df_show = df_c[show_cols].copy()
+            if "return_pct" in df_show.columns:
+                df_show["return_pct"] = df_show["return_pct"].apply(lambda x: sf(x)*100)
+            st.dataframe(df_show, use_container_width=True, hide_index=True, height=300)
+
+    st.markdown("<hr class='ds-hr'>", unsafe_allow_html=True)
     with st.expander("➕ Buka Posisi Baru"):
         with st.form("pos_form"):
             c1,c2,c3 = st.columns(3)
@@ -917,50 +1249,93 @@ def page_portfolio():
                     st.warning("Isi ticker terlebih dahulu.")
 
 
-# ════════ PAGE 8 — SYSTEM LOGS ══════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  PAGE — SYSTEM HEALTH (gabungan System Health + Logs)
+# ══════════════════════════════════════════════════════════════════
 
-def page_system_logs():
-    st.title("⚙️ System Logs")
+def page_system_health():
+    st.markdown('<div class="ds-page-title">System Health</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ds-page-sub">Status komponen sistem dan log terbaru.</div>', unsafe_allow_html=True)
+
+    last_run = load_last_scan_run()
+    uni_count = load_universe_count()
+    regime = load_regime()
+
+    section("KOMPONEN", "🩺")
+    c1,c2,c3,c4 = st.columns(4)
+    with c1:
+        ok = regime is not None
+        st.markdown(tile("Database", "Online" if ok else "Offline"), unsafe_allow_html=True)
+    with c2:
+        st.markdown(tile("Universe", f"{uni_count:,} saham"), unsafe_allow_html=True)
+    with c3:
+        status = ss(last_run.get("status"), "N/A") if last_run else "N/A"
+        st.markdown(tile("Scan Terakhir", status), unsafe_allow_html=True)
+    with c4:
+        dur = si(last_run.get("duration_seconds")) if last_run else 0
+        st.markdown(tile("Durasi Scan", f"{dur}s" if dur else "N/A"), unsafe_allow_html=True)
+
+    if last_run:
+        section("DETAIL SCAN TERAKHIR", "🔬")
+        c1,c2,c3 = st.columns(3)
+        with c1: st.markdown(tile("Saham Discan", si(last_run.get("stocks_scanned"))), unsafe_allow_html=True)
+        with c2: st.markdown(tile("Sinyal Dihasilkan", si(last_run.get("signals_generated"))), unsafe_allow_html=True)
+        with c3: st.markdown(tile("Waktu Mulai", ss(last_run.get("started_at"))[:16].replace("T"," ")), unsafe_allow_html=True)
+
+    section("SYSTEM LOGS", "📜")
     c1,c2 = st.columns(2)
     lim   = c1.slider("Jumlah", 20, 200, 50)
-    lvl   = c2.multiselect("Level",
-                           ["DEBUG","INFO","WARNING","ERROR","CRITICAL"],
+    lvl   = c2.multiselect("Level", ["DEBUG","INFO","WARNING","ERROR","CRITICAL"],
                            default=["WARNING","ERROR","CRITICAL"])
     logs = load_logs(lim)
     filtered = [l for l in logs if ss(l.get("level")) in lvl]
     if not filtered:
-        st.info("Tidak ada log."); return
-    icons  = {"DEBUG":"🔵","INFO":"⚪","WARNING":"🟡","ERROR":"🔴","CRITICAL":"🚨"}
-    colors = {"DEBUG":"#556","INFO":"#8899bb","WARNING":"#ffd740",
-              "ERROR":"#ff6b6b","CRITICAL":"#ff5252"}
-    for e in filtered:
-        lv  = ss(e.get("level"), "INFO")
-        lvc = colors.get(lv, "#aaa")
-        lvi = icons.get(lv, "⚪")
-        lt  = ss(e.get("log_time"))[:19]
-        mod = ss(e.get("module"))
-        msg = ss(e.get("message"))
-        st.markdown(
-            f"{lvi} `{lt}` "
-            f"<span style='color:#4488ff;font-size:.8rem'>[{mod}]</span> "
-            f"<span style='color:{lvc}'>{msg}</span>",
-            unsafe_allow_html=True)
+        st.info("Tidak ada log pada level yang dipilih.")
+    else:
+        icons  = {"DEBUG":"○","INFO":"●","WARNING":"▲","ERROR":"✕","CRITICAL":"⛔"}
+        colors = {"DEBUG":"#5c6478","INFO":"#9aa4b8","WARNING":"#fbbf24",
+                  "ERROR":"#f87171","CRITICAL":"#f87171"}
+        log_html = ""
+        for e in filtered:
+            lv  = ss(e.get("level"), "INFO")
+            lvc = colors.get(lv, "#9aa4b8")
+            lvi = icons.get(lv, "●")
+            lt  = ss(e.get("log_time"))[:19]
+            mod = ss(e.get("module"))
+            msg = ss(e.get("message"))
+            log_html += (
+                f'<div style="padding:6px 0;border-bottom:1px solid #1a2233;font-size:.82rem">'
+                f'<span style="color:{lvc}">{lvi}</span> '
+                f'<span class="ds-num" style="color:#5c6478">{lt}</span> '
+                f'<span style="color:#60a5fa">[{mod}]</span> '
+                f'<span style="color:{lvc if lv in ("ERROR","CRITICAL") else "#e8ebf2"}">{msg}</span>'
+                f'</div>'
+            )
+        st.markdown(f'<div class="ds-card">{log_html}</div>', unsafe_allow_html=True)
 
 
-# ════════ MAIN ═══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════════════
 
 def main():
     page = render_sidebar()
-    {
-        "🏠  Market Overview":    page_market_overview,
-        "🚀  Top Signals":        page_top_signals,
-        "🔍  Why This Signal?":   page_why_this_signal,
-        "📅  Historical Signals": page_historical_signals,
-        "📊  Signal Performance": page_signal_performance,
-        "🏭  Sector Rotation":    page_sector_rotation,
-        "💼  Portfolio":          page_portfolio,
-        "⚙️  System Logs":        page_system_logs,
-    }.get(page, page_market_overview)()
+
+    if "nav_override" in st.session_state:
+        page = st.session_state.pop("nav_override")
+
+    page_map = {
+        "home":        page_home,
+        "signals":     page_top_signals,
+        "detail":      page_signal_detail,
+        "history":     page_historical_signals,
+        "performance": page_signal_performance,
+        "sector":      page_sector_rotation,
+        "portfolio":   page_portfolio,
+        "health":      page_system_health,
+    }
+    page_map.get(page, page_home)()
+
 
 if __name__ == "__main__":
     main()

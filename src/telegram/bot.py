@@ -1,8 +1,20 @@
 """
-DAILY SIGNAL — Telegram Bot v2.3
-Semua string di-escape HTML sebelum dikirim.
-Semua attribute regime di-guard terhadap None.
-Tidak ada f-string kompleks dengan .replace() di dalam kurung kurawal.
+DAILY SIGNAL — Telegram Bot v3.0 "Sinyal Dari Langit"
+Newsletter premium — market summary, alasan per sinyal, dan
+elegant messaging saat tidak ada sinyal.
+
+CATATAN PENTING soal sumber data:
+    send_daily_signals() menerima StockAnalysis OBJECTS langsung dari
+    scanner.py (bukan dict dari database) — dipanggil di scan yang
+    SAMA saat objek itu baru selesai dianalisis analyze_stock(), jadi
+    factor_contribution/confidence SELALU terisi (tidak perlu fallback
+    "migration belum jalan" di jalur ini).
+
+    send_market_open_alert() dan fungsi lain yang QUERY ke database
+    (baca sinyal HARI SEBELUMNYA) tetap pakai .get() dengan default —
+    baris lama sebelum migration 002 mungkin belum punya kolom baru.
+
+Tidak ada perubahan ke engine/scoring/database — murni presentasi.
 """
 
 import requests
@@ -17,9 +29,13 @@ from src.core.logger import get_logger
 log = get_logger("telegram_bot")
 WIB = pytz.timezone("Asia/Jakarta")
 
-REGIME_EMOJI  = {"BULL": "📈", "SIDEWAYS": "↔️", "BEAR": "📉"}
+REGIME_EMOJI  = {"BULL": "🟢", "SIDEWAYS": "🟡", "BEAR": "🔴"}
 SIGNAL_EMOJI  = {"STRONG_BUY": "🚀", "BUY": "🟢", "WATCHLIST": "👀", "AVOID": "🔴"}
 TREND_EMOJI   = {"RISING": "⬆️", "STABLE": "➡️", "FALLING": "⬇️"}
+CONF_EMOJI    = {"Very High": "●●●●", "High": "●●●○", "Medium": "●●○○", "Low": "●○○○"}
+
+DIV  = "━━━━━━━━━━━━━━━━━━━━━━"
+DIV2 = "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
 
 
 # ════════ HELPERS ════════════════════════════════════════════════════
@@ -29,7 +45,6 @@ def _now_wib() -> str:
 
 
 def _sf(v, d=0.0) -> float:
-    """Safe float — None/invalid → default."""
     if v is None:
         return d
     try:
@@ -39,23 +54,30 @@ def _sf(v, d=0.0) -> float:
 
 
 def _ss(v, d="") -> str:
-    """Safe string — None → default."""
     return str(v) if v is not None else d
 
 
-def _he(text: str) -> str:
-    """
-    HTML escape untuk string yang masuk ke pesan Telegram (parse_mode=HTML).
-    Karakter < > & harus di-escape agar tidak diinterpretasikan sebagai HTML tag.
-    """
+def _he(text) -> str:
+    """HTML escape — wajib untuk parse_mode=HTML di Telegram."""
     if not text:
         return ""
     return (
         str(text)
-        .replace("&", "&amp;")   # harus pertama
+        .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
     )
+
+
+def _getattr_safe(obj, path, default=None):
+    """Ambil nested attribute dari objek dataclass dengan aman (mis. 'trend.ema20')."""
+    cur = obj
+    try:
+        for part in path.split("."):
+            cur = getattr(cur, part)
+        return cur if cur is not None else default
+    except AttributeError:
+        return default
 
 
 # ════════ SEND ════════════════════════════════════════════════════════
@@ -116,9 +138,7 @@ def _split_and_send(text: str, max_len: int = 4000) -> bool:
     if len(text) <= max_len:
         return _send_message(text)
 
-    chunks  = []
-    lines   = text.split("\n")
-    current = ""
+    chunks, lines, current = [], text.split("\n"), ""
     for line in lines:
         if len(current) + len(line) + 1 > max_len:
             if current:
@@ -138,80 +158,50 @@ def _split_and_send(text: str, max_len: int = 4000) -> bool:
     return success
 
 
-# ════════ FORMATTERS ══════════════════════════════════════════════════
+# ════════ FORMATTERS — DAILY SIGNAL (newsletter) ═══════════════════════
 
-def _format_signal_card(analysis, index: int) -> str:
-    """Format kartu sinyal satu saham. Tidak ada f-string kompleks."""
-    ticker      = _ss(analysis.ticker).replace(".JK", "")
-    signal_type = _ss(analysis.score.signal_type, "AVOID")
-    score       = _sf(analysis.score.final_score)
-    sig_emoji   = SIGNAL_EMOJI.get(signal_type, "⚪")
+def _format_newsletter_header(regime, funnel: Optional[dict] = None) -> str:
+    """
+    Header newsletter premium: identitas + ringkasan market + scanner
+    summary dalam satu blok yang enak dibaca.
+    """
+    r          = _ss(_getattr_safe(regime, "regime"), "N/A")
+    emoji      = REGIME_EMOJI.get(r, "📊")
+    ihsg_close = _sf(_getattr_safe(regime, "ihsg_close"))
+    ihsg_rsi   = _sf(_getattr_safe(regime, "ihsg_rsi"))
+    ihsg_adx   = _sf(_getattr_safe(regime, "ihsg_adx"))
+    change_5d  = _sf(_getattr_safe(regime, "change_5d"))
+    breadth    = _sf(_getattr_safe(regime, "breadth_score"), 50.0)
+    pct_ema50  = _getattr_safe(regime, "pct_above_ema50")
 
-    bar_filled  = int(score / 10)
-    score_bar   = "█" * bar_filled + "░" * (10 - bar_filled)
-
-    risk        = analysis.risk
-    entry       = _sf(risk.entry_price)
-    sl          = _sf(risk.stop_loss)
-    tp1         = _sf(risk.target_1)
-    tp2         = _sf(risk.target_2)
-    rr          = _sf(risk.risk_reward_tp1)
-    pos_size    = _sf(risk.position_size_pct, 5.0)
-
-    sl_pct      = _sf(risk.risk_pct) * (-1) if entry > 0 else 0
-    tp1_pct     = _sf(risk.reward_pct_tp1)
-    tp2_pct     = _sf(risk.reward_pct_tp2)
-
-    vr          = _sf(analysis.volume.volume_ratio, 1.0)
-    vol_text    = ("⚡ Vol " if analysis.volume.volume_spike else "📊 Vol ") + f"{vr:.1f}x"
-
-    rsi         = _sf(analysis.momentum.rsi)
-    adx         = _sf(analysis.strength.adx)
-    macd_dir    = "▲" if _sf(analysis.momentum.macd_hist) > 0 else "▼"
-    ema_align   = _ss(analysis.trend.ema_alignment, "N/A")[:4]
-    rs          = _sf(analysis.strength.rel_strength)
+    regime_note = {
+        "BULL":     "Momentum mendukung — sinyal beli lebih terpercaya.",
+        "SIDEWAYS": "Pasar konsolidasi — hanya setup terbaik yang lolos.",
+        "BEAR":     "Pasar melemah — threshold sinyal diperketat otomatis.",
+    }.get(r, "")
 
     lines = [
-        "──────────────────────",
-        f"<b>#{index}  {ticker}</b>  {sig_emoji} <b>{signal_type.replace('_', ' ')}</b>",
-        "──────────────────────",
-        f"📊 Score: <b>{score:.0f}/100</b>  <code>[{score_bar}]</code>",
-        "",
-        f"💰 <b>Entry</b>   : Rp{entry:,.0f}",
-        f"🛑 <b>Stop Loss</b>: Rp{sl:,.0f} ({sl_pct:.1f}%)",
-        f"🎯 <b>Target 1</b> : Rp{tp1:,.0f} (+{tp1_pct:.1f}%)",
-        f"🎯 <b>Target 2</b> : Rp{tp2:,.0f} (+{tp2_pct:.1f}%)",
-        f"⚖️ <b>R/R</b>: 1:{rr:.1f}  |  Pos: {pos_size:.0f}%",
-        "",
-        f"📈 RSI:{rsi:.0f} | ADX:{adx:.0f} | MACD:{macd_dir} | EMA:{ema_align}",
-        f"{vol_text} | RS vs IHSG: {rs:+.1f}%",
-    ]
-    return "\n".join(lines) + "\n"
-
-
-def _format_regime_header(regime) -> str:
-    """Format header dengan info regime. Semua string di-escape HTML."""
-    r           = _ss(getattr(regime, "regime", None), "N/A")
-    emoji       = REGIME_EMOJI.get(r, "📊")
-    ihsg_close  = _sf(getattr(regime, "ihsg_close",  0))
-    ihsg_rsi    = _sf(getattr(regime, "ihsg_rsi",    0))
-    change_5d   = _sf(getattr(regime, "change_5d",   0))
-
-    # KUNCI: escape regime_reason karena bisa mengandung < > dari komparasi EMA
-    raw_reason  = _ss(getattr(regime, "regime_reason", ""), "")
-    safe_reason = _he(raw_reason[:60])
-
-    lines = [
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        "🤖 <b>DAILY SIGNAL</b>",
-        f"📅 {_now_wib()}",
-        "━━━━━━━━━━━━━━━━━━━━━━",
+        "✦ <b>SINYAL DARI LANGIT</b>",
+        f"<i>{_now_wib()}</i>",
+        DIV,
         "",
         f"{emoji} <b>Market Regime: {r}</b>",
-        f"📍 IHSG: Rp{ihsg_close:,.0f} | RSI: {ihsg_rsi:.0f}",
-        f"📊 5D: {change_5d:+.1f}% | {safe_reason}",
+        f"<i>{regime_note}</i>",
         "",
+        f"📍 IHSG      : Rp{ihsg_close:,.0f} ({change_5d:+.1f}% 5D)",
+        f"📊 RSI / ADX  : {ihsg_rsi:.1f} / {ihsg_adx:.1f}",
+        f"💠 Breadth   : {breadth:.0f}% saham naik"
+        + (f" · {_sf(pct_ema50):.0f}% di atas EMA50" if pct_ema50 is not None else ""),
     ]
+
+    if funnel:
+        lines += [
+            "",
+            f"🔍 <b>Scanner:</b> {funnel.get('data_available','—')} saham dipindai · "
+            f"{funnel.get('technical_pass','—')} lolos filter teknikal",
+        ]
+
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -221,7 +211,7 @@ def _format_sector_summary(sector_rankings: list, top_n: int = 3) -> str:
     lines = ["🏭 <b>SEKTOR TERKUAT:</b>"]
     for sr in sector_rankings[:top_n]:
         rank        = getattr(sr, "rank", 0)
-        sector_name = _he(_ss(getattr(sr, "sector", "—")))[:20]
+        sector_name = _he(_ss(getattr(sr, "sector", "—")))[:22]
         return_5d   = _sf(getattr(sr, "return_5d", 0))
         trend       = _ss(getattr(sr, "trend", "STABLE"), "STABLE")
         te          = TREND_EMOJI.get(trend, "➡️")
@@ -229,42 +219,122 @@ def _format_sector_summary(sector_rankings: list, top_n: int = 3) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-# ════════ PUBLIC API ══════════════════════════════════════════════════
+def _signal_reasons(analysis) -> list[str]:
+    """
+    Ambil daftar alasan (highlights) dari factor_contribution yang sudah
+    dihitung build_factor_contribution() di ta_engine.py — SATU sumber
+    kebenaran yang sama dipakai Dashboard "Signal Detail". Fallback ke
+    heuristik ringan kalau factor_contribution kosong (mis. exception
+    saat compute, sudah ditangani ta_engine dengan default {}).
+    """
+    fc = getattr(analysis, "factor_contribution", None)
+    if isinstance(fc, dict) and fc.get("highlights"):
+        return list(fc["highlights"])
 
-def send_daily_signals(signals: list, regime, sector_rankings: list = None) -> bool:
-    """Kirim sinyal harian ke Telegram."""
+    reasons = []
+    score = getattr(analysis, "score", None)
+    if score and _sf(getattr(score, "trend_score", 0)) >= 24:
+        reasons.append("EMA Bullish Alignment kuat")
+    vol = getattr(analysis, "volume", None)
+    if vol and getattr(vol, "volume_spike", False):
+        reasons.append(f"Volume Spike {_sf(getattr(vol,'volume_ratio',1)):.1f}x")
+    strength = getattr(analysis, "strength", None)
+    if strength and _sf(getattr(strength, "rel_strength", 0)) > 5:
+        reasons.append("Relative Strength tinggi vs IHSG")
+    if strength and _sf(getattr(strength, "adx", 0)) >= 25:
+        reasons.append("ADX kuat (trend jelas)")
+    if not reasons:
+        reasons.append("Memenuhi ambang skor minimum sistem")
+    return reasons
+
+
+def _format_signal_card(analysis, index: int) -> str:
+    """Kartu sinyal premium — skor, alasan (reason checklist), risk mgmt."""
+    ticker      = _ss(getattr(analysis, "ticker", "")).replace(".JK", "")
+    score_obj   = getattr(analysis, "score", None)
+    signal_type = _ss(getattr(score_obj, "signal_type", ""), "AVOID")
+    raw_score   = _sf(getattr(score_obj, "raw_score", 0))
+    confidence  = _ss(getattr(score_obj, "confidence", ""), "")
+    sig_emoji   = SIGNAL_EMOJI.get(signal_type, "⚪")
+
+    risk        = getattr(analysis, "risk", None)
+    entry       = _sf(getattr(risk, "entry_price", 0))
+    sl          = _sf(getattr(risk, "stop_loss", 0))
+    tp1         = _sf(getattr(risk, "target_1", 0))
+    tp2         = _sf(getattr(risk, "target_2", 0))
+    rr          = _sf(getattr(risk, "risk_reward_tp1", 0))
+    pos_size    = _sf(getattr(risk, "position_size_pct", 0), 5.0)
+
+    sl_pct      = ((sl/entry)-1)*100 if entry > 0 else 0
+    tp1_pct     = ((tp1/entry)-1)*100 if entry > 0 else 0
+    tp2_pct     = ((tp2/entry)-1)*100 if entry > 0 else 0
+
+    sector      = _he(_ss(getattr(analysis, "sector", ""), ""))
+    reasons     = _signal_reasons(analysis)
+    reason_txt  = "\n".join(f"  ✓ {_he(r)}" for r in reasons[:5])
+
+    conf_dots = CONF_EMOJI.get(confidence, "")
+
+    lines = [
+        DIV2,
+        f"<b>#{index}  {ticker}</b>  {sig_emoji} <b>{signal_type.replace('_',' ')}</b>",
+        f"Skor <b>{raw_score:.0f}</b>/100"
+        + (f" · Confidence <b>{confidence}</b> {conf_dots}" if confidence else ""),
+        "",
+        reason_txt,
+        "",
+        f"💰 Entry {entry:,.0f}  🛑 SL {sl:,.0f} ({sl_pct:.1f}%)",
+        f"🎯 TP1 {tp1:,.0f} (+{tp1_pct:.1f}%)  TP2 {tp2:,.0f} (+{tp2_pct:.1f}%)",
+        f"⚖️ R/R 1:{rr:.1f}  ·  Position Size ~{pos_size:.0f}%",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def send_daily_signals(
+    signals: list,
+    regime,
+    sector_rankings: list = None,
+    funnel: Optional[dict] = None,
+) -> bool:
+    """
+    Kirim newsletter sinyal harian. `signals` adalah list StockAnalysis
+    (objek langsung dari scanner, bukan dict DB) — lihat catatan modul.
+    """
     log.info(f"Mengirim {len(signals)} sinyal ke Telegram...")
 
-    parts = [_format_regime_header(regime)]
+    parts = [_format_newsletter_header(regime, funnel)]
 
     if sector_rankings:
         parts.append(_format_sector_summary(sector_rankings, top_n=3))
 
-    strong_buy = sum(1 for s in signals if _ss(getattr(s.score, "signal_type", "")) == "STRONG_BUY")
-    buy_count  = sum(1 for s in signals if _ss(getattr(s.score, "signal_type", "")) == "BUY")
+    strong_buy = sum(1 for s in signals if _ss(_getattr_safe(s, "score.signal_type")) == "STRONG_BUY")
+    buy_count  = sum(1 for s in signals if _ss(_getattr_safe(s, "score.signal_type")) == "BUY")
 
     if not signals:
-        r = _ss(getattr(regime, "regime", ""), "")
+        r = _ss(_getattr_safe(regime, "regime"), "")
+        parts.append(
+            "🌙 <b>Tidak ada sinyal hari ini</b>\n\n"
+            "<i>Tidak ada saham yang memenuhi standar kualitas sistem hari ini.\n\n"
+            "Menunggu peluang terbaik lebih baik daripada mengambil peluang "
+            "yang kurang berkualitas.</i>\n"
+        )
         if r == "BEAR":
-            ihsg_rsi = _sf(getattr(regime, "ihsg_rsi", 50))
-            parts.append("🚫 <b>Tidak ada sinyal BUY hari ini</b>\n")
+            ihsg_rsi = _sf(_getattr_safe(regime, "ihsg_rsi", 50))
             parts.append(
-                "<i>Market sedang BEAR (RSI IHSG "
-                + f"{ihsg_rsi:.0f}"
-                + "). Bot menahan sinyal untuk melindungi modal.\n"
-                + "Tunggu RSI IHSG > 45 atau EMA20 kembali naik sebelum entry.</i>\n"
+                f"<i>Market BEAR (RSI IHSG {ihsg_rsi:.0f}) — threshold sinyal "
+                f"otomatis diperketat untuk melindungi modal.</i>\n"
             )
-        else:
-            parts.append("🔍 <b>Tidak ada sinyal yang memenuhi kriteria hari ini.</b>\n")
-            parts.append("<i>Semua saham tidak memenuhi minimum score. Coba lagi besok.</i>\n")
     else:
-        parts.append(f"🔍 <b>{len(signals)} SINYAL</b> ({strong_buy} 🚀 STRONG BUY + {buy_count} 🟢 BUY)\n")
+        parts.append(
+            f"🎯 <b>{len(signals)} SINYAL TERBAIK</b> "
+            f"({strong_buy} 🚀 Strong Buy + {buy_count} 🟢 Buy)\n"
+        )
         for i, analysis in enumerate(signals, 1):
             parts.append(_format_signal_card(analysis, i))
 
-    parts.append("──────────────────────")
-    parts.append(f"🤖 <b>DAILY SIGNAL</b> | {len(signals)} sinyal aktif")
-    parts.append("<i>Bukan rekomendasi investasi. Selalu DYOR.</i>")
+    parts.append(DIV)
+    parts.append(f"✦ <b>SINYAL DARI LANGIT</b> · {len(signals)} sinyal aktif")
+    parts.append("<i>Bukan rekomendasi investasi. Selalu DYOR & kelola risiko.</i>")
 
     message = "\n".join(parts)
     ok = _split_and_send(message)
@@ -276,16 +346,24 @@ def send_daily_signals(signals: list, regime, sector_rankings: list = None) -> b
     return ok
 
 
+# ════════ PRE-MARKET ALERT ═════════════════════════════════════════════
+
 def send_market_open_alert(regime) -> bool:
     """
-    Kirim alert pre-market (08:30 WIB).
-    Berisi kondisi IHSG + reminder sinyal aktif dari kemarin.
+    Alert pre-market (08:30 WIB). Regime dari DATABASE (hasil scan
+    kemarin, lihat runner.py cmd_pre_market) — data di sini adalah
+    OBJECT (MarketRegime dataclass), bukan dict, karena get_latest_regime()
+    sudah mengembalikan dataclass yang sama.
+
+    Query tambahan ke tabel `signals` untuk reminder sinyal kemarin
+    MEMANG pakai dict (baris database mentah) — kolom baru (confidence
+    dkk) diakses dengan .get() aman untuk baris lama sebelum migration.
     """
-    r           = _ss(getattr(regime, "regime", None), "N/A")
-    emoji       = REGIME_EMOJI.get(r, "📊")
-    ihsg_close  = _sf(getattr(regime, "ihsg_close",  0))
-    ihsg_rsi    = _sf(getattr(regime, "ihsg_rsi",    0))
-    change_5d   = _sf(getattr(regime, "change_5d",   0))
+    r          = _ss(_getattr_safe(regime, "regime"), "N/A")
+    emoji      = REGIME_EMOJI.get(r, "📊")
+    ihsg_close = _sf(_getattr_safe(regime, "ihsg_close"))
+    ihsg_rsi   = _sf(_getattr_safe(regime, "ihsg_rsi"))
+    change_5d  = _sf(_getattr_safe(regime, "change_5d"))
 
     regime_desc = {
         "BULL":     "✅ Kondisi bagus untuk trading",
@@ -293,7 +371,6 @@ def send_market_open_alert(regime) -> bool:
         "BEAR":     "🚫 Hati-hati — kurangi eksposur",
     }.get(r, "")
 
-    # Sinyal aktif dari kemarin
     active_lines = []
     try:
         from src.core.database import get_db
@@ -301,7 +378,7 @@ def send_market_open_alert(regime) -> bool:
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         result = (
             db.table("signals")
-            .select("ticker,signal_type,composite_score")
+            .select("ticker,signal_type,composite_score,confidence")
             .in_("signal_type", ["STRONG_BUY", "BUY"])
             .gte("signal_date", yesterday)
             .order("composite_score", desc=True)
@@ -314,30 +391,33 @@ def send_market_open_alert(regime) -> bool:
                 tk    = _ss(s.get("ticker"), "").replace(".JK", "")
                 st    = _ss(s.get("signal_type"), "").replace("_", " ")
                 sc    = _sf(s.get("composite_score"))
+                conf  = s.get("confidence")
                 se    = "🚀" if s.get("signal_type") == "STRONG_BUY" else "🟢"
-                active_lines.append(f"  {se} <b>{tk}</b> {st} (Score:{sc:.0f})")
+                conf_txt = f" · {_he(conf)}" if conf else ""
+                active_lines.append(f"  {se} <b>{tk}</b> {st} (Skor {sc:.0f}{conf_txt})")
     except Exception:
         pass
 
     active_text = "\n".join(active_lines)
 
     lines = [
-        "🔔 <b>MARKET AKAN BUKA</b>",
-        f"{_now_wib()}",
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        f"{emoji} Regime: <b>{r}</b>",
-        regime_desc,
+        "✦ <b>MARKET AKAN BUKA</b>",
+        f"<i>{_now_wib()}</i>",
+        DIV,
+        f"{emoji} Regime: <b>{r}</b>  ·  {regime_desc}",
         "",
         f"📍 IHSG Terakhir : Rp{ihsg_close:,.0f}",
         f"📊 RSI IHSG      : {ihsg_rsi:.1f}",
         f"🔄 Change 5 Hari : {change_5d:+.1f}%",
         active_text,
-        "━━━━━━━━━━━━━━━━━━━━━━",
+        DIV,
         "<i>⏰ Sinyal baru dikirim ~17:30 WIB</i>",
     ]
     msg = "\n".join(lines)
     return _send_message(msg)
 
+
+# ════════ TP/SL NOTIFICATION ════════════════════════════════════════════
 
 def send_tp_sl_notification(
     ticker: str,
@@ -355,7 +435,7 @@ def send_tp_sl_notification(
 
     lines = [
         f"{emoji} <b>{label}</b>",
-        "──────────────────────",
+        DIV2,
         f"📌 Saham: <b>{_he(ticker.replace('.JK',''))}</b>",
         f"💹 Harga: Rp{price:,.0f}",
         f"📍 Entry: Rp{entry_price:,.0f}",
@@ -364,19 +444,119 @@ def send_tp_sl_notification(
         lines.append(pnl_line)
     lines += [
         f"🕐 Waktu: {_now_wib()}",
-        "──────────────────────",
-        "<i>Auto-monitor oleh DAILY SIGNAL</i>",
+        DIV2,
+        "<i>Auto-monitor oleh Sinyal Dari Langit</i>",
     ]
     return _send_message("\n".join(lines))
 
 
-def send_daily_summary(summary: dict) -> bool:
+# ════════ WEEKLY REPORT ══════════════════════════════════════════════
+
+def send_weekly_report(stats: dict) -> bool:
+    """
+    Laporan mingguan premium — dipanggil dari runner.py cmd_weekly_report
+    yang mengumpulkan `stats` dengan query langsung ke database (lihat
+    gather_weekly_stats() di runner.py). Semua field diakses via .get()
+    dengan default aman — laporan tetap terkirim walau sebagian data
+    tidak tersedia (mis. belum ada backtest minggu ini).
+    """
+    uni    = stats.get("universe", {})
+    db_    = stats.get("database", {})
+    bt     = stats.get("backtest", {})
+    scan   = stats.get("scanner", {})
+    health = stats.get("health", {})
+    mkt    = stats.get("market", {})
+    top_sectors = stats.get("top_sectors", [])
+    top_signals = stats.get("top_signals", [])
+
+    def health_icon(ok):
+        return "✅" if ok else "❌"
+
     lines = [
-        "📋 <b>RINGKASAN MINGGUAN</b>",
-        f"{_now_wib()}",
-        "━━━━━━━━━━━━━━━━━━━━━━",
+        "✦ <b>WEEKLY REPORT</b>",
+        f"<i>{_now_wib()}</i>",
+        DIV,
         "",
-        "📊 <b>Hasil Scan minggu Ini:</b>",
+        "🌐 <b>UNIVERSE</b>",
+        f"  Total saham aktif : {uni.get('total', 'N/A')}",
+        f"  Penambahan        : {uni.get('added', 'N/A')}",
+        f"  Delisting         : {uni.get('removed', 'N/A')}",
+        "",
+        "🗄️ <b>DATABASE</b>",
+        f"  Status  : {health_icon(db_.get('healthy', False))} {db_.get('status', 'N/A')}",
+        f"  Cleanup : {db_.get('cleanup_note', 'Log lama (>30 hari) dibersihkan')}",
+        "",
+        "🔬 <b>BACKTEST</b>",
+    ]
+
+    if bt.get("count"):
+        lines += [
+            f"  Saham dibacktest : {bt.get('count')}",
+            f"  Avg Win Rate     : {_sf(bt.get('avg_win_rate'))*100:.1f}%",
+            f"  Avg Profit Factor: {_sf(bt.get('avg_profit_factor')):.2f}",
+            f"  Avg Sharpe       : {_sf(bt.get('avg_sharpe')):.2f}",
+        ]
+        if bt.get("best_ticker"):
+            lines.append(
+                f"  🏆 Strategi Terbaik: <b>{_he(bt['best_ticker'])}</b> "
+                f"(WR {_sf(bt.get('best_win_rate'))*100:.0f}%)"
+            )
+    else:
+        lines.append("  <i>Belum ada hasil backtest minggu ini</i>")
+
+    lines += [
+        "",
+        "📊 <b>SCANNER STATISTICS</b>",
+        f"  Jumlah scan  : {scan.get('total_runs', 'N/A')}",
+        f"  STRONG BUY   : {scan.get('strong_buy', 'N/A')}",
+        f"  BUY          : {scan.get('buy', 'N/A')}",
+        f"  WATCHLIST    : {scan.get('watchlist', 'N/A')}",
+        "",
+        "🩺 <b>SYSTEM HEALTH</b>",
+        f"  Database : {health_icon(health.get('database', False))}",
+        f"  Telegram : {health_icon(health.get('telegram', False))}",
+        f"  GitHub   : {health_icon(health.get('github', True))}",
+        f"  Supabase : {health_icon(health.get('supabase', False))}",
+        "",
+        "🧭 <b>MARKET SUMMARY</b>",
+        f"  Regime  : {REGIME_EMOJI.get(mkt.get('regime',''),'📊')} {mkt.get('regime', 'N/A')}",
+        f"  Breadth : {mkt.get('breadth', 'N/A')}",
+        f"  Strength (ADX): {mkt.get('strength', 'N/A')}",
+    ]
+
+    if top_sectors:
+        lines.append("")
+        lines.append("🏭 <b>TOP 5 SEKTOR</b>")
+        for i, sec in enumerate(top_sectors[:5], 1):
+            lines.append(f"  #{i} {_he(sec.get('sector',''))} ({_sf(sec.get('return_5d')):+.1f}% 5D)")
+
+    if top_signals:
+        lines.append("")
+        lines.append("🏆 <b>TOP 5 SINYAL MINGGU INI</b>")
+        for i, sig in enumerate(top_signals[:5], 1):
+            tk = _ss(sig.get("ticker","")).replace(".JK","")
+            sc = _sf(sig.get("composite_score"))
+            st_ = _ss(sig.get("signal_type",""))
+            se = SIGNAL_EMOJI.get(st_, "⚪")
+            lines.append(f"  #{i} {se} <b>{tk}</b> — Skor {sc:.0f}")
+
+    lines += [
+        "",
+        DIV,
+        "<i>✦ Sinyal Dari Langit — laporan otomatis mingguan</i>",
+    ]
+
+    return _split_and_send("\n".join(lines))
+
+
+def send_daily_summary(summary: dict) -> bool:
+    """Dipertahankan untuk backward-compat (dipanggil di tempat lain jika ada)."""
+    lines = [
+        "📋 <b>RINGKASAN HARIAN</b>",
+        f"<i>{_now_wib()}</i>",
+        DIV,
+        "",
+        "📊 <b>Hasil Scan Hari Ini:</b>",
         f"• Saham di-scan : {summary.get('stocks_scanned', 0)}",
         f"• STRONG BUY   : {summary.get('strong_buy', 0)} 🚀",
         f"• BUY          : {summary.get('buy', 0)} 🟢",
@@ -384,8 +564,6 @@ def send_daily_summary(summary: dict) -> bool:
         "",
         f"🏛️ <b>Market:</b> {_he(str(summary.get('regime', 'N/A')))}",
         f"⏱ <b>Durasi:</b> {summary.get('duration_seconds', 0):.0f}s",
-        "",
-        "<i>Sistem berjalan normal ✓</i>",
     ]
     return _send_message("\n".join(lines))
 
@@ -405,13 +583,13 @@ def send_health_alert(health_data: dict) -> bool:
         comp_lines.append(f"{icon} {_he(component)}: {_he(s)}")
 
     lines = [
-        "⚠️ <b>HEALTH ALERT — DAILY SIGNAL</b>",
-        f"{_now_wib()}",
-        "──────────────────────",
+        "⚠️ <b>HEALTH ALERT</b>",
+        f"<i>{_now_wib()}</i>",
+        DIV2,
         f"Status: <b>{_he(overall.upper())}</b>",
         "",
     ] + comp_lines + [
-        "──────────────────────",
+        DIV2,
         "<i>Periksa system logs untuk detail.</i>",
     ]
     return _send_message("\n".join(lines))
