@@ -53,164 +53,157 @@ st.set_page_config(
 
 _CSS_BLOCK = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
 <style>
 
-/* ── Base tokens ─────────────────────────────────────────────── */
+/* ── Base tokens (Neon Cyber Theme) ──────────────────────────── */
 :root{
-    --bg:            #0a0e1a;
-    --surface:       #131824;
-    --surface-2:     #171d2c;
-    --border:        #1f2937;
-    --border-soft:   #1a2233;
-    --text:          #e8ebf2;
-    --text-dim:      #9aa4b8;
-    --text-faint:    #5c6478;
-    --accent:        #60a5fa;
-    --accent-soft:   rgba(96,165,250,.12);
-    --strong-buy:    #00c896;
-    --buy:           #4ade80;
-    --watchlist:     #fbbf24;
-    --avoid:         #f87171;
-    --strong-buy-bg: rgba(0,200,150,.12);
-    --buy-bg:        rgba(74,222,128,.12);
-    --watchlist-bg:  rgba(251,191,36,.12);
-    --avoid-bg:      rgba(248,113,113,.12);
+    --bg:            #050505;
+    --surface:       rgba(18, 18, 18, 0.65);
+    --surface-2:     rgba(35, 35, 35, 0.8);
+    --border:        rgba(255, 255, 255, 0.08);
+    --border-soft:   rgba(255, 255, 255, 0.03);
+    --text:          #f4f4f5;
+    --text-dim:      #a1a1aa;
+    --text-faint:    #52525b;
+    --accent:        #00f0ff;
+    --accent-soft:   rgba(0, 240, 255, 0.15);
+    --strong-buy:    #00ffa3;
+    --buy:           #b4ff00;
+    --watchlist:     #ffb800;
+    --avoid:         #ff3366;
+    --strong-buy-bg: rgba(0, 255, 163, 0.12);
+    --buy-bg:        rgba(180, 255, 0, 0.12);
+    --watchlist-bg:  rgba(255, 184, 0, 0.12);
+    --avoid-bg:      rgba(255, 51, 102, 0.12);
 }
 
-html, body, [class*="css"]{
-    font-family: 'Inter', -apple-system, sans-serif;
-}
-h1,h2,h3,h4, .ds-heading{
-    font-family: 'Manrope', sans-serif !important;
-}
+html, body, [class*="css"]{ font-family: 'Inter', sans-serif; background: var(--bg); }
+h1,h2,h3,h4, .ds-heading{ font-family: 'Manrope', sans-serif !important; }
 
-.main{ padding: 0 1.4rem; background: var(--bg); }
+/* ── Background & Layouts ────────────────────────────────────── */
+.main{ padding: 0 1.4rem; background: radial-gradient(circle at top right, #131824 0%, var(--bg) 60%); }
 .block-container{ padding-top: 1rem; padding-bottom: 2rem; max-width: 1400px; }
-[data-testid="stAppViewContainer"]{ background: var(--bg); }
+[data-testid="stAppViewContainer"]{ background: transparent; }
 [data-testid="stHeader"]{ background: transparent; }
 
-/* Angka selalu tabular (sejajar) */
-.ds-num{ font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+/* Angka pakai font ala coding/terminal biar rapi & pro */
+.ds-num{ font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
 
-/* ── Sidebar ──────────────────────────────────────────────────── */
+/* ── Sidebar Glass Effect ─────────────────────────────────────── */
 div[data-testid="stSidebarContent"]{
-    background: var(--surface);
+    background: rgba(10, 10, 12, 0.85);
+    backdrop-filter: blur(20px);
     border-right: 1px solid var(--border);
 }
 .ds-brand{
-    font-family:'Manrope',sans-serif; font-weight:800; font-size:1.3rem;
+    font-family:'Manrope',sans-serif; font-weight:800; font-size:1.35rem;
     letter-spacing:-.02em; color:var(--text); margin-bottom:0;
     display:flex; align-items:center; gap:8px;
+    text-shadow: 0 0 15px var(--accent-soft);
 }
-.ds-brand-sub{ color:var(--text-faint); font-size:.72rem; letter-spacing:.08em;
-    text-transform:uppercase; margin-top:2px; margin-bottom:14px; }
+.ds-brand-sub{ color:var(--accent); font-size:.72rem; letter-spacing:.1em;
+    text-transform:uppercase; margin-top:2px; margin-bottom:14px; font-weight: 700; }
 
 div[data-testid="stSidebarContent"] div[role="radiogroup"] label{
     padding: 9px 12px !important; border-radius: 8px !important;
-    margin-bottom: 2px !important; transition: background .15s;
+    margin-bottom: 2px !important; transition: all .2s ease; border: 1px solid transparent;
 }
 div[data-testid="stSidebarContent"] div[role="radiogroup"] label:hover{
-    background: var(--surface-2);
+    background: var(--surface-2); border: 1px solid var(--border);
 }
 
-/* ── Streamlit native metric (dipakai minimal, mostly diganti ds-metric) */
-div[data-testid="metric-container"]{
-    background: var(--surface); border:1px solid var(--border);
-    border-radius: 12px; padding: 14px 16px;
+/* ── Cards & Glassmorphism ────────────────────────────────────── */
+.ds-card, .ds-hero, .ds-tile, div[data-testid="metric-container"] {
+    background: var(--surface);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
-div[data-testid="metric-container"] label{ color:var(--text-dim) !important; font-size:.75rem; }
-div[data-testid="metric-container"] div[data-testid="stMetricValue"]{
-    font-size:1.35rem; font-weight:700; color:var(--text); font-family:'Inter',sans-serif;
+.ds-card:hover, .ds-tile:hover {
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+    border-color: rgba(255, 255, 255, 0.15);
 }
+.ds-card{ padding: 18px 20px; margin-bottom: 12px; }
+.ds-card-flush{ padding:0; overflow:hidden; }
+.ds-hero{ padding:22px 26px; margin-bottom:16px; background: linear-gradient(135deg, rgba(18,18,18,0.8) 0%, rgba(18,18,18,0.2) 100%); border-top: 1px solid rgba(255,255,255,0.12);}
+
+/* ── Metric tile ─────────────────────────────────────────────── */
+.ds-tile{ padding:15px 18px; height:100%; border-top: 1px solid rgba(255,255,255,0.1); }
+.ds-tile-label{ color:var(--text-dim); font-size:.7rem; text-transform:uppercase;
+    letter-spacing:.08em; margin-bottom:5px; font-weight:600;}
+.ds-tile-value{ font-weight:800; font-size:1.35rem; color:var(--text); text-shadow: 0 0 10px rgba(255,255,255,0.1); }
+.ds-tile-delta{ font-size:.74rem; margin-top:4px; font-weight:600;}
+.ds-up{ color: var(--buy); text-shadow: 0 0 8px var(--buy-bg); } 
+.ds-down{ color: var(--avoid); text-shadow: 0 0 8px var(--avoid-bg); } 
+.ds-flat{ color:var(--text-faint); }
 
 /* ── Typography helpers ──────────────────────────────────────── */
-.ds-page-title{ font-family:'Manrope',sans-serif; font-weight:800; font-size:1.7rem;
+.ds-page-title{ font-family:'Manrope',sans-serif; font-weight:800; font-size:1.8rem;
     color:var(--text); letter-spacing:-.02em; margin-bottom:2px; }
-.ds-page-sub{ color:var(--text-faint); font-size:.85rem; margin-bottom:1.1rem; }
+.ds-page-sub{ color:var(--accent); font-size:.85rem; margin-bottom:1.2rem; font-weight:500; }
 .ds-section{ font-family:'Manrope',sans-serif; font-weight:700; font-size:.95rem;
-    color:var(--text); margin: 22px 0 10px; display:flex; align-items:center; gap:8px; }
-.ds-section .ds-section-line{ flex:1; height:1px; background:var(--border); }
-.ds-caption{ color:var(--text-faint); font-size:.78rem; }
+    color:var(--text); margin: 24px 0 12px; display:flex; align-items:center; gap:10px; letter-spacing:0.03em;}
+.ds-section .ds-section-line{ flex:1; height:1px; background: linear-gradient(90deg, var(--border) 0%, transparent 100%); }
+.ds-caption{ color:var(--text-faint); font-size:.78rem; font-family:'JetBrains Mono', monospace;}
 
-/* ── Cards ────────────────────────────────────────────────────── */
-.ds-card{
-    background: var(--surface); border:1px solid var(--border);
-    border-radius: 14px; padding: 18px 20px; margin-bottom: 12px;
-}
-.ds-card-flush{ padding:0; overflow:hidden; }
-.ds-hero{
-    background: linear-gradient(135deg, var(--surface) 0%, var(--surface-2) 100%);
-    border:1px solid var(--border); border-radius:16px; padding:22px 26px; margin-bottom:16px;
-}
-
-/* ── Metric tile (custom, dipakai di Home & Signal Detail) ──── */
-.ds-tile{
-    background: var(--surface); border:1px solid var(--border); border-radius:12px;
-    padding:13px 16px; height:100%;
-}
-.ds-tile-label{ color:var(--text-faint); font-size:.7rem; text-transform:uppercase;
-    letter-spacing:.06em; margin-bottom:5px; }
-.ds-tile-value{ font-family:'Inter',sans-serif; font-weight:700; font-size:1.25rem;
-    color:var(--text); font-variant-numeric: tabular-nums; }
-.ds-tile-delta{ font-size:.74rem; margin-top:3px; }
-.ds-up{ color: var(--buy); } .ds-down{ color: var(--avoid); } .ds-flat{ color:var(--text-faint); }
-
-/* ── Badges / Chips ───────────────────────────────────────────── */
-.ds-badge{ display:inline-flex; align-items:center; gap:5px; padding:3px 11px;
-    border-radius:20px; font-weight:700; font-size:.71rem; letter-spacing:.02em; }
-.ds-badge::before{ content:''; width:6px; height:6px; border-radius:50%; }
-.ds-badge-sb{ background:var(--strong-buy-bg); color:var(--strong-buy); }
+/* ── Badges / Chips (Neon Glow) ──────────────────────────────── */
+.ds-badge{ display:inline-flex; align-items:center; gap:6px; padding:4px 12px;
+    border-radius:20px; font-weight:700; font-size:.71rem; letter-spacing:.04em; border: 1px solid transparent; }
+.ds-badge::before{ content:''; width:6px; height:6px; border-radius:50%; box-shadow: 0 0 8px currentColor; }
+.ds-badge-sb{ background:var(--strong-buy-bg); color:var(--strong-buy); border-color:rgba(0,255,163,0.3); text-shadow: 0 0 8px rgba(0,255,163,0.4); }
 .ds-badge-sb::before{ background:var(--strong-buy); }
-.ds-badge-buy{ background:var(--buy-bg); color:var(--buy); }
+.ds-badge-buy{ background:var(--buy-bg); color:var(--buy); border-color:rgba(180,255,0,0.3); }
 .ds-badge-buy::before{ background:var(--buy); }
-.ds-badge-wl{ background:var(--watchlist-bg); color:var(--watchlist); }
+.ds-badge-wl{ background:var(--watchlist-bg); color:var(--watchlist); border-color:rgba(255,184,0,0.3); }
 .ds-badge-wl::before{ background:var(--watchlist); }
-.ds-badge-av{ background:var(--avoid-bg); color:var(--avoid); }
+.ds-badge-av{ background:var(--avoid-bg); color:var(--avoid); border-color:rgba(255,51,102,0.3); }
 .ds-badge-av::before{ background:var(--avoid); }
 
-.ds-chip{ display:inline-block; padding:2px 9px; border-radius:6px; font-size:.71rem;
-    background:var(--surface-2); color:var(--text-dim); border:1px solid var(--border); }
-.ds-chip-accent{ background:var(--accent-soft); color:var(--accent); border-color:transparent; }
+.ds-chip{ display:inline-block; padding:3px 10px; border-radius:6px; font-size:.71rem;
+    background:rgba(255,255,255,0.03); color:var(--text-dim); border:1px solid var(--border); font-weight:600;}
+.ds-chip-accent{ background:var(--accent-soft); color:var(--accent); border-color:var(--accent); text-shadow: 0 0 8px var(--accent-soft);}
 
-.ds-conf{ display:inline-flex; align-items:center; gap:4px; font-size:.71rem; font-weight:600; }
-.ds-conf-dots span{ width:5px; height:5px; border-radius:50%; display:inline-block; margin-right:2px; background:var(--border); }
+.ds-conf{ display:inline-flex; align-items:center; gap:4px; font-size:.71rem; font-weight:700; letter-spacing:0.02em;}
+.ds-conf-dots span{ width:6px; height:6px; border-radius:50%; display:inline-block; margin-right:2px; background:var(--border); }
 
 /* ── Gauge / progress bars ───────────────────────────────────── */
-.ds-gauge-row{ display:flex; align-items:center; gap:10px; margin:7px 0; }
-.ds-gauge-label{ width:92px; font-size:.78rem; color:var(--text-dim); flex-shrink:0; }
-.ds-gauge-track{ flex:1; height:9px; background:var(--surface-2); border-radius:5px; overflow:hidden; }
-.ds-gauge-fill{ height:100%; border-radius:5px; }
-.ds-gauge-val{ width:52px; text-align:right; font-size:.78rem; font-weight:700; color:var(--text);
-    font-variant-numeric: tabular-nums; flex-shrink:0; }
+.ds-gauge-row{ display:flex; align-items:center; gap:12px; margin:8px 0; }
+.ds-gauge-label{ width:92px; font-size:.78rem; color:var(--text-dim); flex-shrink:0; font-weight:500;}
+.ds-gauge-track{ flex:1; height:6px; background:rgba(255,255,255,0.05); border-radius:10px; overflow:hidden; }
+.ds-gauge-fill{ height:100%; border-radius:10px; box-shadow: 0 0 10px currentColor; }
+.ds-gauge-val{ width:52px; text-align:right; font-size:.78rem; font-weight:700; color:var(--text); flex-shrink:0; }
 
-/* ── Signal list row (Top Signals / Home top picks) ──────────── */
-.ds-row{
-    display:flex; align-items:center; gap:14px; padding:12px 16px;
-    border-bottom:1px solid var(--border-soft); transition:background .12s;
-}
+/* ── Signal list row ─────────────────────────────────────────── */
+.ds-row{ display:flex; align-items:center; gap:14px; padding:14px 18px;
+    border-bottom:1px solid var(--border-soft); transition:all .15s ease; }
 .ds-row:last-child{ border-bottom:none; }
-.ds-row:hover{ background: var(--surface-2); }
-.ds-row-ticker{ font-weight:700; font-size:.92rem; color:var(--text); width:64px; flex-shrink:0; }
-.ds-row-sector{ color:var(--text-faint); font-size:.72rem; }
+.ds-row:hover{ background: rgba(255,255,255,0.02); padding-left: 22px; }
+.ds-row-ticker{ font-weight:800; font-size:.95rem; color:var(--text); width:64px; flex-shrink:0; letter-spacing:0.02em;}
+.ds-row-sector{ color:var(--text-faint); font-size:.72rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em;}
 
 /* ── Reason checklist ─────────────────────────────────────────── */
-.ds-reason{ display:flex; align-items:flex-start; gap:8px; padding:6px 0; font-size:.87rem; color:var(--text-dim); }
-.ds-reason-check{ color:var(--strong-buy); font-weight:800; flex-shrink:0; }
+.ds-reason{ display:flex; align-items:flex-start; gap:10px; padding:8px 0; font-size:.87rem; color:var(--text-dim); }
+.ds-reason-check{ color:var(--accent); font-weight:800; flex-shrink:0; text-shadow: 0 0 8px var(--accent-soft);}
 
 /* ── Health dot ───────────────────────────────────────────────── */
-.ds-health{ display:flex; align-items:center; gap:8px; padding:9px 0; }
-.ds-health-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
-.ds-health-ok{ background:var(--buy); box-shadow:0 0 6px var(--buy); }
-.ds-health-bad{ background:var(--avoid); box-shadow:0 0 6px var(--avoid); }
-.ds-health-warn{ background:var(--watchlist); box-shadow:0 0 6px var(--watchlist); }
+.ds-health{ display:flex; align-items:center; gap:8px; padding:9px 0; font-weight:600; font-size:0.85rem;}
+.ds-health-dot{ width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.ds-health-ok{ background:var(--strong-buy); box-shadow:0 0 10px var(--strong-buy); }
+.ds-health-bad{ background:var(--avoid); box-shadow:0 0 10px var(--avoid); }
+.ds-health-warn{ background:var(--watchlist); box-shadow:0 0 10px var(--watchlist); }
 
 hr{ border-color: var(--border) !important; }
-.ds-hr{ height:1px; background:var(--border); margin:14px 0; border:none; }
+.ds-hr{ height:1px; background:var(--border-soft); margin:16px 0; border:none; }
 
-/* Streamlit widget refinement */
-.stDataFrame{ border-radius:12px; overflow:hidden; border:1px solid var(--border); }
-button[kind="secondary"], button[kind="primary"]{ border-radius:9px !important; }
+/* ── Streamlit native tweaks ─────────────────────────────────── */
+.stDataFrame{ border-radius:12px; overflow:hidden; border:1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
+button[kind="secondary"]{ background: var(--surface) !important; border: 1px solid var(--border) !important; color: var(--text) !important; border-radius: 8px !important; }
+button[kind="secondary"]:hover{ border-color: var(--accent) !important; color: var(--accent) !important; box-shadow: 0 0 15px var(--accent-soft) !important; }
+button[kind="primary"]{ background: var(--accent) !important; color: #000 !important; font-weight: 800 !important; border-radius: 8px !important; box-shadow: 0 0 15px var(--accent-soft) !important; border: none !important;}
 </style>
 """
 
@@ -260,17 +253,17 @@ def fmt_pct(v, dec=1, dec100=False):
     x = sf(v) * (100 if dec100 else 1)
     return f"{x:+.{dec}f}%"
 
-SIGNAL_COLOR = {"STRONG_BUY":"#00c896","BUY":"#4ade80","WATCHLIST":"#fbbf24","AVOID":"#f87171"}
-SIGNAL_BG    = {"STRONG_BUY":"rgba(0,200,150,.12)","BUY":"rgba(74,222,128,.12)",
-                "WATCHLIST":"rgba(251,191,36,.12)","AVOID":"rgba(248,113,113,.12)"}
+SIGNAL_COLOR = {"STRONG_BUY":"#00ffa3","BUY":"#b4ff00","WATCHLIST":"#ffb800","AVOID":"#ff3366"}
+SIGNAL_BG    = {"STRONG_BUY":"rgba(0,255,163,.12)","BUY":"rgba(180,255,0,.12)",
+                "WATCHLIST":"rgba(255,184,0,.12)","AVOID":"rgba(255,51,102,.12)"}
 SIGNAL_LABEL = {"STRONG_BUY":"STRONG BUY","BUY":"BUY","WATCHLIST":"WATCHLIST","AVOID":"AVOID"}
 
 def score_color(s):
     s = sf(s)
-    if s >= 75: return "#00c896"
-    if s >= 60: return "#4ade80"
-    if s >= 45: return "#fbbf24"
-    return "#f87171"
+    if s >= 75: return "#00ffa3" # Neon Emerald
+    if s >= 60: return "#b4ff00" # Neon Lime
+    if s >= 45: return "#ffb800" # Neon Amber
+    return "#ff3366"             # Neon Red
 
 def signal_badge(t):
     cls = {"STRONG_BUY":"ds-badge-sb","BUY":"ds-badge-buy","WATCHLIST":"ds-badge-wl","AVOID":"ds-badge-av"}.get(t,"ds-badge-av")
@@ -281,10 +274,10 @@ def confidence_badge(c):
     """Confidence dari migration 002 (compute_confidence) — fallback aman jika belum ada."""
     c = ss(c, "Low")
     dots = {"Very High":4, "High":3, "Medium":2, "Low":1}.get(c, 1)
-    colors = {"Very High":"#00c896","High":"#4ade80","Medium":"#fbbf24","Low":"#9aa4b8"}
-    color = colors.get(c, "#9aa4b8")
+    colors = {"Very High":"#00ffa3","High":"#b4ff00","Medium":"#ffb800","Low":"#52525b"}
+    color = colors.get(c, "#a1a1aa")
     dot_html = "".join(
-        f'<span style="background:{color if i < dots else "#232c3d"}"></span>'
+        f'<span style="background:{color if i < dots else "rgba(255,255,255,0.08)"; box-shadow: {"0 0 8px "+color if i < dots else "none"}"></span>'
         for i in range(4)
     )
     return f'<span class="ds-conf" style="color:{color}"><span class="ds-conf-dots">{dot_html}</span>{c}</span>'
@@ -295,8 +288,8 @@ def gauge_row(label, val, mx, color=None):
     return (
         f'<div class="ds-gauge-row">'
         f'<div class="ds-gauge-label">{label}</div>'
-        f'<div class="ds-gauge-track"><div class="ds-gauge-fill" style="width:{pct:.0f}%;background:{c}"></div></div>'
-        f'<div class="ds-gauge-val">{sf(val):.0f}/{mx:.0f}</div>'
+        f'<div class="ds-gauge-track"><div class="ds-gauge-fill" style="width:{pct:.0f}%;background:{c};color:{c}"></div></div>'
+        f'<div class="ds-gauge-val ds-num">{sf(val):.0f}/{mx:.0f}</div>'
         f'</div>'
     )
 
@@ -310,24 +303,24 @@ def tile(label, value, delta=None, delta_dir="flat"):
 
 def section(title, icon=""):
     st.markdown(
-        f'<div class="ds-section">{icon} {title}<div class="ds-section-line"></div></div>',
+        f'<div class="ds-section"><span style="color:var(--accent);text-shadow:0 0 10px var(--accent-soft)">{icon}</span> {title}<div class="ds-section-line"></div></div>',
         unsafe_allow_html=True
     )
 
 def regime_visual(r):
     return {
-        "BULL":     ("🟢", "#00c896", "Kondisi pasar mendukung — sinyal beli lebih terpercaya."),
-        "SIDEWAYS": ("🟡", "#fbbf24", "Pasar konsolidasi — pilih saham selektif dengan skor tinggi."),
-        "BEAR":     ("🔴", "#f87171", "Pasar melemah — kurangi eksposur, perketat stop loss."),
-    }.get(r, ("⚪", "#9aa4b8", "Status pasar belum diketahui."))
+        "BULL":     ("🚀", "#00ffa3", "Kondisi pasar mendukung — sinyal beli lebih terpercaya."),
+        "SIDEWAYS": ("⚖️", "#ffb800", "Pasar konsolidasi — pilih saham selektif dengan skor tinggi."),
+        "BEAR":     ("🩸", "#ff3366", "Pasar melemah — kurangi eksposur, perketat stop loss."),
+    }.get(r, ("⚪", "#52525b", "Status pasar belum diketahui."))
 
 DARK_BG = "rgba(0,0,0,0)"
-PLOT_BG = "rgba(19,24,36,1)"
-GRID    = "#1f2937"
+PLOT_BG = "rgba(10,10,12,0.3)"
+GRID    = "rgba(255,255,255,0.05)"
 LAYOUT  = dict(paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG,
-               font=dict(family="Inter, sans-serif", color="#9aa4b8", size=11),
+               font=dict(family="Inter, sans-serif", color="#a1a1aa", size=11),
                margin=dict(l=0,r=0,t=30,b=0),
-               xaxis=dict(gridcolor=GRID), yaxis=dict(gridcolor=GRID))
+               xaxis=dict(gridcolor=GRID, zerolinecolor=GRID), yaxis=dict(gridcolor=GRID, zerolinecolor=GRID))
 
 
 # ══════════════════════════════════════════════════════════════════
