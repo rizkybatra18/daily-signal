@@ -277,7 +277,7 @@ def confidence_badge(c):
     colors = {"Very High":"#00ffa3","High":"#b4ff00","Medium":"#ffb800","Low":"#52525b"}
     color = colors.get(c, "#a1a1aa")
     dot_html = "".join(
-        f'<span style="background:{color if i < dots else "rgba(255,255,255,0.08)"; box-shadow: {"0 0 8px "+color if i < dots else "none"}"></span>'
+        f'<span style="background:{color if i < dots else "rgba(255,255,255,0.08)"}; box-shadow: {"0 0 8px "+color if i < dots else "none"};"></span>'
         for i in range(4)
     )
     return f'<span class="ds-conf" style="color:{color}"><span class="ds-conf-dots">{dot_html}</span>{c}</span>'
