@@ -421,3 +421,72 @@ def update_scan_run(run_id: str, update_data: dict) -> bool:
         return True
     except Exception:
         return False
+
+
+# ══════════════════════════════════════════════════════════════════
+#  SIGNAL RESULTS — Automatic Signal Evaluation Engine
+#  (Additive, tabel baru dari migration 003. Tidak menyentuh fungsi
+#  save_signal/save_market_regime/dst di atas — lihat src/signals/
+#  signal_evaluator.py untuk logika lengkapnya.)
+# ══════════════════════════════════════════════════════════════════
+
+def upsert_signal_result(data: dict) -> bool:
+    """
+    Simpan/update 1 baris signal_results. Upsert pakai constraint
+    UNIQUE(ticker, signal_date, signal_type) dari migration 003 —
+    aman dipanggil berulang (idempotent), baik untuk snapshot baru
+    (INSERT) maupun update status evaluasi (OPEN -> CLOSED/EXPIRED).
+    """
+    ok, _ = _upsert_with_schema_fallback(
+        "signal_results", data, on_conflict="ticker,signal_date,signal_type"
+    )
+    return ok
+
+
+def get_open_signal_results(ticker: Optional[str] = None) -> list[dict]:
+    """Ambil semua signal_results yang masih berstatus OPEN."""
+    try:
+        db = get_db()
+        q = db.table("signal_results").select("*").eq("status", "OPEN")
+        if ticker:
+            q = q.eq("ticker", ticker)
+        result = q.execute()
+        return result.data or []
+    except Exception as e:
+        from src.core.logger import get_logger
+        log = get_logger("database")
+        log.error(f"Gagal ambil open signal_results: {e}")
+        return []
+
+
+def get_signal_results_range(days: int = 90, status: Optional[str] = None) -> list[dict]:
+    """Ambil signal_results dalam rentang N hari terakhir (untuk Signal Performance)."""
+    try:
+        from datetime import date, timedelta
+        db = get_db()
+        since = (date.today() - timedelta(days=days)).isoformat()
+        q = db.table("signal_results").select("*").gte("signal_date", since)
+        if status:
+            q = q.eq("status", status)
+        result = q.order("signal_date", desc=True).execute()
+        return result.data or []
+    except Exception as e:
+        from src.core.logger import get_logger
+        log = get_logger("database")
+        log.error(f"Gagal ambil signal_results range: {e}")
+        return []
+
+
+def signal_result_exists(ticker: str, signal_date: str, signal_type: str) -> bool:
+    """Cek apakah snapshot untuk kombinasi ini sudah ada (idempotency check tambahan)."""
+    try:
+        db = get_db()
+        result = (
+            db.table("signal_results")
+            .select("id", count="exact")
+            .eq("ticker", ticker).eq("signal_date", signal_date).eq("signal_type", signal_type)
+            .limit(1).execute()
+        )
+        return (result.count or 0) > 0
+    except Exception:
+        return False

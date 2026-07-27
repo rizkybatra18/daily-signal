@@ -53,157 +53,164 @@ st.set_page_config(
 
 _CSS_BLOCK = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 
-/* ── Base tokens (Neon Cyber Theme) ──────────────────────────── */
+/* ── Base tokens ─────────────────────────────────────────────── */
 :root{
-    --bg:            #050505;
-    --surface:       rgba(18, 18, 18, 0.65);
-    --surface-2:     rgba(35, 35, 35, 0.8);
-    --border:        rgba(255, 255, 255, 0.08);
-    --border-soft:   rgba(255, 255, 255, 0.03);
-    --text:          #f4f4f5;
-    --text-dim:      #a1a1aa;
-    --text-faint:    #52525b;
-    --accent:        #00f0ff;
-    --accent-soft:   rgba(0, 240, 255, 0.15);
-    --strong-buy:    #00ffa3;
-    --buy:           #b4ff00;
-    --watchlist:     #ffb800;
-    --avoid:         #ff3366;
-    --strong-buy-bg: rgba(0, 255, 163, 0.12);
-    --buy-bg:        rgba(180, 255, 0, 0.12);
-    --watchlist-bg:  rgba(255, 184, 0, 0.12);
-    --avoid-bg:      rgba(255, 51, 102, 0.12);
+    --bg:            #0a0e1a;
+    --surface:       #131824;
+    --surface-2:     #171d2c;
+    --border:        #1f2937;
+    --border-soft:   #1a2233;
+    --text:          #e8ebf2;
+    --text-dim:      #9aa4b8;
+    --text-faint:    #5c6478;
+    --accent:        #60a5fa;
+    --accent-soft:   rgba(96,165,250,.12);
+    --strong-buy:    #00c896;
+    --buy:           #4ade80;
+    --watchlist:     #fbbf24;
+    --avoid:         #f87171;
+    --strong-buy-bg: rgba(0,200,150,.12);
+    --buy-bg:        rgba(74,222,128,.12);
+    --watchlist-bg:  rgba(251,191,36,.12);
+    --avoid-bg:      rgba(248,113,113,.12);
 }
 
-html, body, [class*="css"]{ font-family: 'Inter', sans-serif; background: var(--bg); }
-h1,h2,h3,h4, .ds-heading{ font-family: 'Manrope', sans-serif !important; }
+html, body, [class*="css"]{
+    font-family: 'Inter', -apple-system, sans-serif;
+}
+h1,h2,h3,h4, .ds-heading{
+    font-family: 'Manrope', sans-serif !important;
+}
 
-/* ── Background & Layouts ────────────────────────────────────── */
-.main{ padding: 0 1.4rem; background: radial-gradient(circle at top right, #131824 0%, var(--bg) 60%); }
+.main{ padding: 0 1.4rem; background: var(--bg); }
 .block-container{ padding-top: 1rem; padding-bottom: 2rem; max-width: 1400px; }
-[data-testid="stAppViewContainer"]{ background: transparent; }
+[data-testid="stAppViewContainer"]{ background: var(--bg); }
 [data-testid="stHeader"]{ background: transparent; }
 
-/* Angka pakai font ala coding/terminal biar rapi & pro */
-.ds-num{ font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+/* Angka selalu tabular (sejajar) */
+.ds-num{ font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
 
-/* ── Sidebar Glass Effect ─────────────────────────────────────── */
+/* ── Sidebar ──────────────────────────────────────────────────── */
 div[data-testid="stSidebarContent"]{
-    background: rgba(10, 10, 12, 0.85);
-    backdrop-filter: blur(20px);
+    background: var(--surface);
     border-right: 1px solid var(--border);
 }
 .ds-brand{
-    font-family:'Manrope',sans-serif; font-weight:800; font-size:1.35rem;
+    font-family:'Manrope',sans-serif; font-weight:800; font-size:1.3rem;
     letter-spacing:-.02em; color:var(--text); margin-bottom:0;
     display:flex; align-items:center; gap:8px;
-    text-shadow: 0 0 15px var(--accent-soft);
 }
-.ds-brand-sub{ color:var(--accent); font-size:.72rem; letter-spacing:.1em;
-    text-transform:uppercase; margin-top:2px; margin-bottom:14px; font-weight: 700; }
+.ds-brand-sub{ color:var(--text-faint); font-size:.72rem; letter-spacing:.08em;
+    text-transform:uppercase; margin-top:2px; margin-bottom:14px; }
 
 div[data-testid="stSidebarContent"] div[role="radiogroup"] label{
     padding: 9px 12px !important; border-radius: 8px !important;
-    margin-bottom: 2px !important; transition: all .2s ease; border: 1px solid transparent;
+    margin-bottom: 2px !important; transition: background .15s;
 }
 div[data-testid="stSidebarContent"] div[role="radiogroup"] label:hover{
-    background: var(--surface-2); border: 1px solid var(--border);
+    background: var(--surface-2);
 }
 
-/* ── Cards & Glassmorphism ────────────────────────────────────── */
-.ds-card, .ds-hero, .ds-tile, div[data-testid="metric-container"] {
-    background: var(--surface);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
+/* ── Streamlit native metric (dipakai minimal, mostly diganti ds-metric) */
+div[data-testid="metric-container"]{
+    background: var(--surface); border:1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px;
 }
-.ds-card:hover, .ds-tile:hover {
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
-    border-color: rgba(255, 255, 255, 0.15);
+div[data-testid="metric-container"] label{ color:var(--text-dim) !important; font-size:.75rem; }
+div[data-testid="metric-container"] div[data-testid="stMetricValue"]{
+    font-size:1.35rem; font-weight:700; color:var(--text); font-family:'Inter',sans-serif;
 }
-.ds-card{ padding: 18px 20px; margin-bottom: 12px; }
-.ds-card-flush{ padding:0; overflow:hidden; }
-.ds-hero{ padding:22px 26px; margin-bottom:16px; background: linear-gradient(135deg, rgba(18,18,18,0.8) 0%, rgba(18,18,18,0.2) 100%); border-top: 1px solid rgba(255,255,255,0.12);}
-
-/* ── Metric tile ─────────────────────────────────────────────── */
-.ds-tile{ padding:15px 18px; height:100%; border-top: 1px solid rgba(255,255,255,0.1); }
-.ds-tile-label{ color:var(--text-dim); font-size:.7rem; text-transform:uppercase;
-    letter-spacing:.08em; margin-bottom:5px; font-weight:600;}
-.ds-tile-value{ font-weight:800; font-size:1.35rem; color:var(--text); text-shadow: 0 0 10px rgba(255,255,255,0.1); }
-.ds-tile-delta{ font-size:.74rem; margin-top:4px; font-weight:600;}
-.ds-up{ color: var(--buy); text-shadow: 0 0 8px var(--buy-bg); } 
-.ds-down{ color: var(--avoid); text-shadow: 0 0 8px var(--avoid-bg); } 
-.ds-flat{ color:var(--text-faint); }
 
 /* ── Typography helpers ──────────────────────────────────────── */
-.ds-page-title{ font-family:'Manrope',sans-serif; font-weight:800; font-size:1.8rem;
+.ds-page-title{ font-family:'Manrope',sans-serif; font-weight:800; font-size:1.7rem;
     color:var(--text); letter-spacing:-.02em; margin-bottom:2px; }
-.ds-page-sub{ color:var(--accent); font-size:.85rem; margin-bottom:1.2rem; font-weight:500; }
+.ds-page-sub{ color:var(--text-faint); font-size:.85rem; margin-bottom:1.1rem; }
 .ds-section{ font-family:'Manrope',sans-serif; font-weight:700; font-size:.95rem;
-    color:var(--text); margin: 24px 0 12px; display:flex; align-items:center; gap:10px; letter-spacing:0.03em;}
-.ds-section .ds-section-line{ flex:1; height:1px; background: linear-gradient(90deg, var(--border) 0%, transparent 100%); }
-.ds-caption{ color:var(--text-faint); font-size:.78rem; font-family:'JetBrains Mono', monospace;}
+    color:var(--text); margin: 22px 0 10px; display:flex; align-items:center; gap:8px; }
+.ds-section .ds-section-line{ flex:1; height:1px; background:var(--border); }
+.ds-caption{ color:var(--text-faint); font-size:.78rem; }
 
-/* ── Badges / Chips (Neon Glow) ──────────────────────────────── */
-.ds-badge{ display:inline-flex; align-items:center; gap:6px; padding:4px 12px;
-    border-radius:20px; font-weight:700; font-size:.71rem; letter-spacing:.04em; border: 1px solid transparent; }
-.ds-badge::before{ content:''; width:6px; height:6px; border-radius:50%; box-shadow: 0 0 8px currentColor; }
-.ds-badge-sb{ background:var(--strong-buy-bg); color:var(--strong-buy); border-color:rgba(0,255,163,0.3); text-shadow: 0 0 8px rgba(0,255,163,0.4); }
+/* ── Cards ────────────────────────────────────────────────────── */
+.ds-card{
+    background: var(--surface); border:1px solid var(--border);
+    border-radius: 14px; padding: 18px 20px; margin-bottom: 12px;
+}
+.ds-card-flush{ padding:0; overflow:hidden; }
+.ds-hero{
+    background: linear-gradient(135deg, var(--surface) 0%, var(--surface-2) 100%);
+    border:1px solid var(--border); border-radius:16px; padding:22px 26px; margin-bottom:16px;
+}
+
+/* ── Metric tile (custom, dipakai di Home & Signal Detail) ──── */
+.ds-tile{
+    background: var(--surface); border:1px solid var(--border); border-radius:12px;
+    padding:13px 16px; height:100%;
+}
+.ds-tile-label{ color:var(--text-faint); font-size:.7rem; text-transform:uppercase;
+    letter-spacing:.06em; margin-bottom:5px; }
+.ds-tile-value{ font-family:'Inter',sans-serif; font-weight:700; font-size:1.25rem;
+    color:var(--text); font-variant-numeric: tabular-nums; }
+.ds-tile-delta{ font-size:.74rem; margin-top:3px; }
+.ds-up{ color: var(--buy); } .ds-down{ color: var(--avoid); } .ds-flat{ color:var(--text-faint); }
+
+/* ── Badges / Chips ───────────────────────────────────────────── */
+.ds-badge{ display:inline-flex; align-items:center; gap:5px; padding:3px 11px;
+    border-radius:20px; font-weight:700; font-size:.71rem; letter-spacing:.02em; }
+.ds-badge::before{ content:''; width:6px; height:6px; border-radius:50%; }
+.ds-badge-sb{ background:var(--strong-buy-bg); color:var(--strong-buy); }
 .ds-badge-sb::before{ background:var(--strong-buy); }
-.ds-badge-buy{ background:var(--buy-bg); color:var(--buy); border-color:rgba(180,255,0,0.3); }
+.ds-badge-buy{ background:var(--buy-bg); color:var(--buy); }
 .ds-badge-buy::before{ background:var(--buy); }
-.ds-badge-wl{ background:var(--watchlist-bg); color:var(--watchlist); border-color:rgba(255,184,0,0.3); }
+.ds-badge-wl{ background:var(--watchlist-bg); color:var(--watchlist); }
 .ds-badge-wl::before{ background:var(--watchlist); }
-.ds-badge-av{ background:var(--avoid-bg); color:var(--avoid); border-color:rgba(255,51,102,0.3); }
+.ds-badge-av{ background:var(--avoid-bg); color:var(--avoid); }
 .ds-badge-av::before{ background:var(--avoid); }
 
-.ds-chip{ display:inline-block; padding:3px 10px; border-radius:6px; font-size:.71rem;
-    background:rgba(255,255,255,0.03); color:var(--text-dim); border:1px solid var(--border); font-weight:600;}
-.ds-chip-accent{ background:var(--accent-soft); color:var(--accent); border-color:var(--accent); text-shadow: 0 0 8px var(--accent-soft);}
+.ds-chip{ display:inline-block; padding:2px 9px; border-radius:6px; font-size:.71rem;
+    background:var(--surface-2); color:var(--text-dim); border:1px solid var(--border); }
+.ds-chip-accent{ background:var(--accent-soft); color:var(--accent); border-color:transparent; }
 
-.ds-conf{ display:inline-flex; align-items:center; gap:4px; font-size:.71rem; font-weight:700; letter-spacing:0.02em;}
-.ds-conf-dots span{ width:6px; height:6px; border-radius:50%; display:inline-block; margin-right:2px; background:var(--border); }
+.ds-conf{ display:inline-flex; align-items:center; gap:4px; font-size:.71rem; font-weight:600; }
+.ds-conf-dots span{ width:5px; height:5px; border-radius:50%; display:inline-block; margin-right:2px; background:var(--border); }
 
 /* ── Gauge / progress bars ───────────────────────────────────── */
-.ds-gauge-row{ display:flex; align-items:center; gap:12px; margin:8px 0; }
-.ds-gauge-label{ width:92px; font-size:.78rem; color:var(--text-dim); flex-shrink:0; font-weight:500;}
-.ds-gauge-track{ flex:1; height:6px; background:rgba(255,255,255,0.05); border-radius:10px; overflow:hidden; }
-.ds-gauge-fill{ height:100%; border-radius:10px; box-shadow: 0 0 10px currentColor; }
-.ds-gauge-val{ width:52px; text-align:right; font-size:.78rem; font-weight:700; color:var(--text); flex-shrink:0; }
+.ds-gauge-row{ display:flex; align-items:center; gap:10px; margin:7px 0; }
+.ds-gauge-label{ width:92px; font-size:.78rem; color:var(--text-dim); flex-shrink:0; }
+.ds-gauge-track{ flex:1; height:9px; background:var(--surface-2); border-radius:5px; overflow:hidden; }
+.ds-gauge-fill{ height:100%; border-radius:5px; }
+.ds-gauge-val{ width:52px; text-align:right; font-size:.78rem; font-weight:700; color:var(--text);
+    font-variant-numeric: tabular-nums; flex-shrink:0; }
 
-/* ── Signal list row ─────────────────────────────────────────── */
-.ds-row{ display:flex; align-items:center; gap:14px; padding:14px 18px;
-    border-bottom:1px solid var(--border-soft); transition:all .15s ease; }
+/* ── Signal list row (Top Signals / Home top picks) ──────────── */
+.ds-row{
+    display:flex; align-items:center; gap:14px; padding:12px 16px;
+    border-bottom:1px solid var(--border-soft); transition:background .12s;
+}
 .ds-row:last-child{ border-bottom:none; }
-.ds-row:hover{ background: rgba(255,255,255,0.02); padding-left: 22px; }
-.ds-row-ticker{ font-weight:800; font-size:.95rem; color:var(--text); width:64px; flex-shrink:0; letter-spacing:0.02em;}
-.ds-row-sector{ color:var(--text-faint); font-size:.72rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em;}
+.ds-row:hover{ background: var(--surface-2); }
+.ds-row-ticker{ font-weight:700; font-size:.92rem; color:var(--text); width:64px; flex-shrink:0; }
+.ds-row-sector{ color:var(--text-faint); font-size:.72rem; }
 
 /* ── Reason checklist ─────────────────────────────────────────── */
-.ds-reason{ display:flex; align-items:flex-start; gap:10px; padding:8px 0; font-size:.87rem; color:var(--text-dim); }
-.ds-reason-check{ color:var(--accent); font-weight:800; flex-shrink:0; text-shadow: 0 0 8px var(--accent-soft);}
+.ds-reason{ display:flex; align-items:flex-start; gap:8px; padding:6px 0; font-size:.87rem; color:var(--text-dim); }
+.ds-reason-check{ color:var(--strong-buy); font-weight:800; flex-shrink:0; }
 
 /* ── Health dot ───────────────────────────────────────────────── */
-.ds-health{ display:flex; align-items:center; gap:8px; padding:9px 0; font-weight:600; font-size:0.85rem;}
-.ds-health-dot{ width:10px; height:10px; border-radius:50%; flex-shrink:0; }
-.ds-health-ok{ background:var(--strong-buy); box-shadow:0 0 10px var(--strong-buy); }
-.ds-health-bad{ background:var(--avoid); box-shadow:0 0 10px var(--avoid); }
-.ds-health-warn{ background:var(--watchlist); box-shadow:0 0 10px var(--watchlist); }
+.ds-health{ display:flex; align-items:center; gap:8px; padding:9px 0; }
+.ds-health-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.ds-health-ok{ background:var(--buy); box-shadow:0 0 6px var(--buy); }
+.ds-health-bad{ background:var(--avoid); box-shadow:0 0 6px var(--avoid); }
+.ds-health-warn{ background:var(--watchlist); box-shadow:0 0 6px var(--watchlist); }
 
 hr{ border-color: var(--border) !important; }
-.ds-hr{ height:1px; background:var(--border-soft); margin:16px 0; border:none; }
+.ds-hr{ height:1px; background:var(--border); margin:14px 0; border:none; }
 
-/* ── Streamlit native tweaks ─────────────────────────────────── */
-.stDataFrame{ border-radius:12px; overflow:hidden; border:1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
-button[kind="secondary"]{ background: var(--surface) !important; border: 1px solid var(--border) !important; color: var(--text) !important; border-radius: 8px !important; }
-button[kind="secondary"]:hover{ border-color: var(--accent) !important; color: var(--accent) !important; box-shadow: 0 0 15px var(--accent-soft) !important; }
-button[kind="primary"]{ background: var(--accent) !important; color: #000 !important; font-weight: 800 !important; border-radius: 8px !important; box-shadow: 0 0 15px var(--accent-soft) !important; border: none !important;}
+/* Streamlit widget refinement */
+.stDataFrame{ border-radius:12px; overflow:hidden; border:1px solid var(--border); }
+button[kind="secondary"], button[kind="primary"]{ border-radius:9px !important; }
 </style>
 """
 
@@ -253,17 +260,17 @@ def fmt_pct(v, dec=1, dec100=False):
     x = sf(v) * (100 if dec100 else 1)
     return f"{x:+.{dec}f}%"
 
-SIGNAL_COLOR = {"STRONG_BUY":"#00ffa3","BUY":"#b4ff00","WATCHLIST":"#ffb800","AVOID":"#ff3366"}
-SIGNAL_BG    = {"STRONG_BUY":"rgba(0,255,163,.12)","BUY":"rgba(180,255,0,.12)",
-                "WATCHLIST":"rgba(255,184,0,.12)","AVOID":"rgba(255,51,102,.12)"}
+SIGNAL_COLOR = {"STRONG_BUY":"#00c896","BUY":"#4ade80","WATCHLIST":"#fbbf24","AVOID":"#f87171"}
+SIGNAL_BG    = {"STRONG_BUY":"rgba(0,200,150,.12)","BUY":"rgba(74,222,128,.12)",
+                "WATCHLIST":"rgba(251,191,36,.12)","AVOID":"rgba(248,113,113,.12)"}
 SIGNAL_LABEL = {"STRONG_BUY":"STRONG BUY","BUY":"BUY","WATCHLIST":"WATCHLIST","AVOID":"AVOID"}
 
 def score_color(s):
     s = sf(s)
-    if s >= 75: return "#00ffa3" # Neon Emerald
-    if s >= 60: return "#b4ff00" # Neon Lime
-    if s >= 45: return "#ffb800" # Neon Amber
-    return "#ff3366"             # Neon Red
+    if s >= 75: return "#00c896"
+    if s >= 60: return "#4ade80"
+    if s >= 45: return "#fbbf24"
+    return "#f87171"
 
 def signal_badge(t):
     cls = {"STRONG_BUY":"ds-badge-sb","BUY":"ds-badge-buy","WATCHLIST":"ds-badge-wl","AVOID":"ds-badge-av"}.get(t,"ds-badge-av")
@@ -274,10 +281,10 @@ def confidence_badge(c):
     """Confidence dari migration 002 (compute_confidence) — fallback aman jika belum ada."""
     c = ss(c, "Low")
     dots = {"Very High":4, "High":3, "Medium":2, "Low":1}.get(c, 1)
-    colors = {"Very High":"#00ffa3","High":"#b4ff00","Medium":"#ffb800","Low":"#52525b"}
-    color = colors.get(c, "#a1a1aa")
+    colors = {"Very High":"#00c896","High":"#4ade80","Medium":"#fbbf24","Low":"#9aa4b8"}
+    color = colors.get(c, "#9aa4b8")
     dot_html = "".join(
-        f'<span style="background:{color if i < dots else "rgba(255,255,255,0.08)"}; box-shadow: {"0 0 8px "+color if i < dots else "none"};"></span>'
+        f'<span style="background:{color if i < dots else "#232c3d"}"></span>'
         for i in range(4)
     )
     return f'<span class="ds-conf" style="color:{color}"><span class="ds-conf-dots">{dot_html}</span>{c}</span>'
@@ -288,8 +295,8 @@ def gauge_row(label, val, mx, color=None):
     return (
         f'<div class="ds-gauge-row">'
         f'<div class="ds-gauge-label">{label}</div>'
-        f'<div class="ds-gauge-track"><div class="ds-gauge-fill" style="width:{pct:.0f}%;background:{c};color:{c}"></div></div>'
-        f'<div class="ds-gauge-val ds-num">{sf(val):.0f}/{mx:.0f}</div>'
+        f'<div class="ds-gauge-track"><div class="ds-gauge-fill" style="width:{pct:.0f}%;background:{c}"></div></div>'
+        f'<div class="ds-gauge-val">{sf(val):.0f}/{mx:.0f}</div>'
         f'</div>'
     )
 
@@ -303,24 +310,24 @@ def tile(label, value, delta=None, delta_dir="flat"):
 
 def section(title, icon=""):
     st.markdown(
-        f'<div class="ds-section"><span style="color:var(--accent);text-shadow:0 0 10px var(--accent-soft)">{icon}</span> {title}<div class="ds-section-line"></div></div>',
+        f'<div class="ds-section">{icon} {title}<div class="ds-section-line"></div></div>',
         unsafe_allow_html=True
     )
 
 def regime_visual(r):
     return {
-        "BULL":     ("🚀", "#00ffa3", "Kondisi pasar mendukung — sinyal beli lebih terpercaya."),
-        "SIDEWAYS": ("⚖️", "#ffb800", "Pasar konsolidasi — pilih saham selektif dengan skor tinggi."),
-        "BEAR":     ("🩸", "#ff3366", "Pasar melemah — kurangi eksposur, perketat stop loss."),
-    }.get(r, ("⚪", "#52525b", "Status pasar belum diketahui."))
+        "BULL":     ("🟢", "#00c896", "Kondisi pasar mendukung — sinyal beli lebih terpercaya."),
+        "SIDEWAYS": ("🟡", "#fbbf24", "Pasar konsolidasi — pilih saham selektif dengan skor tinggi."),
+        "BEAR":     ("🔴", "#f87171", "Pasar melemah — kurangi eksposur, perketat stop loss."),
+    }.get(r, ("⚪", "#9aa4b8", "Status pasar belum diketahui."))
 
 DARK_BG = "rgba(0,0,0,0)"
-PLOT_BG = "rgba(10,10,12,0.3)"
-GRID    = "rgba(255,255,255,0.05)"
+PLOT_BG = "rgba(19,24,36,1)"
+GRID    = "#1f2937"
 LAYOUT  = dict(paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG,
-               font=dict(family="Inter, sans-serif", color="#a1a1aa", size=11),
+               font=dict(family="Inter, sans-serif", color="#9aa4b8", size=11),
                margin=dict(l=0,r=0,t=30,b=0),
-               xaxis=dict(gridcolor=GRID, zerolinecolor=GRID), yaxis=dict(gridcolor=GRID, zerolinecolor=GRID))
+               xaxis=dict(gridcolor=GRID), yaxis=dict(gridcolor=GRID))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -472,6 +479,39 @@ def load_last_scan_run():
     except: return None
 
 
+# ── Automatic Signal Evaluation loaders (signal_results) ────────────
+# Signal Performance TIDAK LAGI pakai load_portfolio_stats/
+# load_closed_positions/load_equity_curve di atas — fungsi itu
+# dipertahankan (dipakai page_portfolio() legacy yang masih ada di
+# backend, cuma disembunyikan dari nav) tapi Signal Performance kini
+# 100% berbasis signal_results (evaluasi otomatis, bukan trading manual).
+
+@st.cache_data(ttl=180)
+def load_signal_results(days=90, status=None):
+    try:
+        db = get_db()
+        if not db: return []
+        since = (date.today() - timedelta(days=days)).isoformat()
+        q = db.table("signal_results").select("*").gte("signal_date", since)
+        if status:
+            q = q.eq("status", status)
+        r = q.order("signal_date", desc=True).execute()
+        return r.data or []
+    except: return []
+
+
+@st.cache_data(ttl=180)
+def load_signal_results_all_closed():
+    """Semua sinyal CLOSED/EXPIRED (tanpa batas hari) — untuk statistik jangka panjang."""
+    try:
+        db = get_db()
+        if not db: return []
+        r = db.table("signal_results").select("*")\
+              .neq("status", "OPEN").order("exit_date", desc=True).limit(1000).execute()
+        return r.data or []
+    except: return []
+
+
 # ══════════════════════════════════════════════════════════════════
 #  SIDEBAR
 # ══════════════════════════════════════════════════════════════════
@@ -483,7 +523,12 @@ PAGES = [
     ("history", "📅", "Historical Signals"),
     ("performance", "📊", "Signal Performance"),
     ("sector", "🏭", "Sector Rotation"),
-    ("portfolio", "💼", "Portfolio"),
+    # ("portfolio", "💼", "Portfolio"),  # DISEMBUNYIKAN dari UI — Signal
+    # Performance sekarang pakai signal_results (Automatic Signal
+    # Evaluation), bukan lagi Portfolio manual. Fungsi page_portfolio()
+    # TIDAK dihapus (tetap ada di bawah, backend legacy tetap utuh),
+    # cuma tidak dirutekan dari sidebar. Baris ini tinggal di-uncomment
+    # kapan saja kalau Portfolio manual mau dimunculkan lagi.
     ("health", "⚙️", "System Health"),
 ]
 
@@ -982,73 +1027,130 @@ def page_historical_signals():
 # ══════════════════════════════════════════════════════════════════
 
 def page_signal_performance():
+    """
+    Signal Performance — 100% berbasis `signal_results` (Automatic
+    Signal Evaluation Engine), BUKAN lagi Portfolio manual. Merepresentasikan
+    performa SELURUH sinyal yang dikirim sistem (STRONG_BUY/BUY/WATCHLIST),
+    bukan performa trading pribadi Anda.
+    """
     st.markdown('<div class="ds-page-title">Signal Performance</div>', unsafe_allow_html=True)
-    st.markdown('<div class="ds-page-sub">Apakah sistem ini benar-benar bekerja?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ds-page-sub">Performa seluruh sinyal sistem — evaluasi otomatis, bukan trading manual.</div>', unsafe_allow_html=True)
 
-    stats   = load_portfolio_stats()
-    closed  = load_closed_positions(200)
-    equity  = load_equity_curve()
-    bt      = load_backtests()
+    c1, c2 = st.columns([1.3, 3])
+    days_back = c1.selectbox("Periode", [30, 60, 90, 180, 365], index=2, key="perf_days")
+
+    rows = load_signal_results(days=days_back)
+    bt   = load_backtests()
+
+    if not rows:
+        st.info(
+            "Belum ada data signal_results. Data akan terisi otomatis setiap kali "
+            "daily scan berjalan (lihat src/signals/signal_evaluator.py) — pastikan "
+            "migration 003_signal_evaluation.sql sudah dijalankan di Supabase."
+        )
+        return
+
+    df = pd.DataFrame(rows)
+    for col in ["net_return_pct", "gross_return_pct", "holding_days"]:
+        if col in df.columns:
+            df[col] = df[col].apply(sf)
+
+    total_signals   = len(df)
+    open_df         = df[df["status"] == "OPEN"]
+    closed_df       = df[df["status"].isin(["CLOSED", "EXPIRED"])]
+    expired_df      = df[df["status"] == "EXPIRED"]
+
+    section("RINGKASAN", "📊")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: st.markdown(tile("Total Sinyal", total_signals), unsafe_allow_html=True)
+    with c2: st.markdown(tile("Open", len(open_df)), unsafe_allow_html=True)
+    with c3: st.markdown(tile("Closed", len(df[df["status"]=="CLOSED"])), unsafe_allow_html=True)
+    with c4: st.markdown(tile("Expired", len(expired_df)), unsafe_allow_html=True)
+    with c5:
+        pct_resolved = len(closed_df)/total_signals*100 if total_signals>0 else 0
+        st.markdown(tile("% Terselesaikan", f"{pct_resolved:.0f}%"), unsafe_allow_html=True)
 
     section("KPI UTAMA", "📈")
-    if stats and stats.total_trades > 0:
-        wr = sf(stats.win_rate)
-        pf = sf(stats.profit_factor)
+    if len(closed_df) > 0:
+        wins   = closed_df[closed_df["net_return_pct"] > 0]
+        losses = closed_df[closed_df["net_return_pct"] <= 0]
+        win_rate = len(wins) / len(closed_df)
+        avg_return = closed_df["net_return_pct"].mean()
+        avg_win  = wins["net_return_pct"].mean() if len(wins) > 0 else 0
+        avg_loss = losses["net_return_pct"].mean() if len(losses) > 0 else 0
+        avg_holding = closed_df["holding_days"].mean()
+
+        gross_win  = wins["net_return_pct"].sum() if len(wins) > 0 else 0
+        gross_loss = abs(losses["net_return_pct"].sum()) if len(losses) > 0 else 0
+        profit_factor = gross_win / gross_loss if gross_loss > 0 else float("inf")
+
+        loss_rate = 1 - win_rate
+        expectancy = (win_rate * avg_win) + (loss_rate * avg_loss)
+
         c1,c2,c3,c4,c5,c6 = st.columns(6)
-        with c1: st.markdown(tile("Total Trades", si(stats.total_trades)), unsafe_allow_html=True)
-        with c2: st.markdown(tile("Win Rate", f"{wr:.1%}", "OK ✓" if wr>=0.55 else "< 55%", "up" if wr>=0.55 else "down"), unsafe_allow_html=True)
-        with c3: st.markdown(tile("Profit Factor", f"{pf:.2f}", "OK ✓" if pf>1 else "< 1.0", "up" if pf>1 else "down"), unsafe_allow_html=True)
-        with c4: st.markdown(tile("Expectancy", f"{sf(stats.expectancy):+.2f}%"), unsafe_allow_html=True)
-        with c5: st.markdown(tile("Avg Gain", f"{sf(stats.avg_gain_pct):+.2f}%"), unsafe_allow_html=True)
-        with c6: st.markdown(tile("Max Drawdown", f"{sf(stats.max_drawdown_pct):.1f}%"), unsafe_allow_html=True)
+        with c1: st.markdown(tile("Winning Signals", len(wins)), unsafe_allow_html=True)
+        with c2: st.markdown(tile("Losing Signals", len(losses)), unsafe_allow_html=True)
+        with c3:
+            wr_ok = win_rate >= 0.5
+            st.markdown(tile("Win Rate", f"{win_rate:.1%}", "OK ✓" if wr_ok else "< 50%", "up" if wr_ok else "down"), unsafe_allow_html=True)
+        with c4:
+            pf_display = f"{profit_factor:.2f}" if profit_factor != float("inf") else "∞"
+            st.markdown(tile("Profit Factor", pf_display, "OK ✓" if profit_factor>1 else "< 1.0", "up" if profit_factor>1 else "down"), unsafe_allow_html=True)
+        with c5: st.markdown(tile("Avg Return", f"{avg_return:+.2f}%", None, "up" if avg_return>=0 else "down"), unsafe_allow_html=True)
+        with c6: st.markdown(tile("Avg Holding", f"{avg_holding:.1f} hari"), unsafe_allow_html=True)
+
+        st.markdown(tile("Expectancy (per sinyal)", f"{expectancy:+.2f}%", None, "up" if expectancy>=0 else "down"), unsafe_allow_html=True)
     else:
-        st.info("Belum ada trade selesai — statistik akan muncul setelah posisi ditutup.")
+        st.info("Belum ada sinyal yang CLOSED/EXPIRED dalam periode ini — statistik akan muncul begitu evaluator menutup sinyal pertama.")
 
-    if equity:
+    # ── Equity Curve (dari net_return_pct sinyal yang closed, urut exit_date) ─
+    if len(closed_df) > 0 and "exit_date" in closed_df.columns:
         section("EQUITY CURVE", "💹")
-        df_e = pd.DataFrame(equity)
-        df_e["snapshot_date"] = pd.to_datetime(df_e["snapshot_date"])
-        df_e["total_equity"]  = df_e["total_equity"].apply(sf)
-        fig = go.Figure(go.Scatter(
-            x=df_e["snapshot_date"], y=df_e["total_equity"],
-            mode="lines", line=dict(color="#00c896", width=2),
-            fill="tozeroy", fillcolor="rgba(0,200,150,.08)",
-            hovertemplate="<b>%{x|%d %b}</b><br>Rp%{y:,.0f}<extra></extra>"))
-        fig.update_layout(height=280, paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG,
-                          font=LAYOUT["font"], margin=LAYOUT["margin"], xaxis=LAYOUT["xaxis"],
-                          yaxis=dict(gridcolor=GRID, tickformat=",.0f"))
-        st.plotly_chart(fig, use_container_width=True)
+        eq = closed_df.dropna(subset=["exit_date"]).sort_values("exit_date").copy()
+        if not eq.empty:
+            eq["exit_date"] = pd.to_datetime(eq["exit_date"])
+            eq["cum_return"] = (1 + eq["net_return_pct"]/100).cumprod()
+            fig = go.Figure(go.Scatter(
+                x=eq["exit_date"], y=eq["cum_return"],
+                mode="lines", line=dict(color="#00c896", width=2),
+                fill="tozeroy", fillcolor="rgba(0,200,150,.08)",
+                hovertemplate="<b>%{x|%d %b}</b><br>Cum. Return: %{y:.2f}x<extra></extra>"))
+            fig.update_layout(height=260, paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG,
+                              font=LAYOUT["font"], margin=LAYOUT["margin"], xaxis=LAYOUT["xaxis"],
+                              yaxis=dict(gridcolor=GRID, title="Cumulative (x)"))
+            st.plotly_chart(fig, use_container_width=True)
 
-    if closed:
-        section("ANALISIS TRADE", "🔬")
-        df_c = pd.DataFrame(closed)
-        df_c["return_pct"] = df_c["return_pct"].apply(lambda x: sf(x)*100)
-        df_c["net_pnl"]    = df_c["net_pnl"].apply(sf)
-
-        c1,c2,c3 = st.columns(3)
+    # ── Distribusi & Outcome ─────────────────────────────────────────
+    if len(closed_df) > 0:
+        section("DISTRIBUSI HASIL", "🔬")
+        c1, c2, c3 = st.columns(3)
         with c1:
-            wins = len(df_c[df_c["net_pnl"]>0]); losses = len(df_c[df_c["net_pnl"]<=0])
-            fig = go.Figure(go.Pie(labels=["Win","Loss"], values=[wins,losses],
-                                  marker_colors=["#00c896","#f87171"], hole=0.6,
-                                  textinfo="label+percent"))
-            fig.update_layout(title="Win / Loss", height=250, **LAYOUT, showlegend=False)
+            outcome_counts = df["exit_reason"].value_counts(dropna=True)
+            colors_map = {"TP1":"#4ade80","TP2":"#00c896","SL":"#f87171","EXPIRED":"#9aa4b8"}
+            fig = go.Figure(go.Pie(
+                labels=outcome_counts.index.tolist(), values=outcome_counts.values.tolist(),
+                marker_colors=[colors_map.get(x,"#60a5fa") for x in outcome_counts.index],
+                hole=0.6, textinfo="label+percent"))
+            fig.update_layout(title="Outcome Distribution", height=250, **LAYOUT, showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
         with c2:
-            fig = px.histogram(df_c, x="return_pct", nbins=20,
+            fig = px.histogram(closed_df, x="net_return_pct", nbins=20,
                                title="Distribusi Return (%)",
                                color_discrete_sequence=["#60a5fa"])
             fig.update_layout(height=250, **LAYOUT)
             st.plotly_chart(fig, use_container_width=True)
         with c3:
-            if "exit_date" in df_c.columns:
-                df_c["month"] = pd.to_datetime(df_c["exit_date"], errors="coerce").dt.strftime("%Y-%m")
-                mo = df_c.groupby("month")["net_pnl"].sum().reset_index()
-                mo["color"] = mo["net_pnl"].apply(lambda x: "#00c896" if x>=0 else "#f87171")
-                fig = go.Figure(go.Bar(x=mo["month"], y=mo["net_pnl"], marker_color=mo["color"],
-                                       text=mo["net_pnl"].apply(lambda x: f"Rp{x:,.0f}"), textposition="outside"))
-                fig.update_layout(title="PnL per Bulan", height=250, **LAYOUT)
+            eqm = closed_df.dropna(subset=["exit_date"]).copy()
+            if not eqm.empty:
+                eqm["month"] = pd.to_datetime(eqm["exit_date"]).dt.strftime("%Y-%m")
+                mo = eqm.groupby("month")["net_return_pct"].sum().reset_index()
+                mo["color"] = mo["net_return_pct"].apply(lambda x: "#00c896" if x>=0 else "#f87171")
+                fig = go.Figure(go.Bar(x=mo["month"], y=mo["net_return_pct"], marker_color=mo["color"],
+                                       text=mo["net_return_pct"].apply(lambda x: f"{x:+.1f}%"), textposition="outside"))
+                fig.update_layout(title="Monthly Performance (%)", height=250, **LAYOUT)
                 st.plotly_chart(fig, use_container_width=True)
 
+    # ── Backtest Summary (dipertahankan, sumber terpisah dari signal_results) ─
     if bt:
         section("BACKTEST SUMMARY", "🧪")
         df_bt = pd.DataFrame(bt)
@@ -1074,7 +1176,6 @@ def page_signal_performance():
             use_container_width=True, hide_index=True)
     else:
         st.info("Backtest berjalan otomatis setiap Sabtu pagi.")
-
 
 # ══════════════════════════════════════════════════════════════════
 #  PAGE — SECTOR ROTATION

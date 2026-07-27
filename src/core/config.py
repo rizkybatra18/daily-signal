@@ -125,6 +125,12 @@ class Settings(BaseSettings):
     min_win_rate: float = 0.55
     min_pattern_count: int = 10
 
+    # ── Automatic Signal Evaluation ──────────────────────────────
+    # Berapa hari bursa maksimum sebuah sinyal dipantau sebelum
+    # dianggap EXPIRED jika TP/SL belum tersentuh — lihat
+    # src/signals/signal_evaluator.py.
+    signal_max_holding_days: int = 20
+
     # ── Data History ──────────────────────────────────────────────
     history_days_warmup: int = 252    # ~1 tahun untuk warm up indikator
     history_days_scan: int = 252      # Data yang diambil untuk scan
