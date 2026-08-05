@@ -480,20 +480,47 @@ def _score_volume(analysis: StockAnalysis) -> float:
 
 def _score_strength(analysis: StockAnalysis) -> float:
     """
-    Strength Score: 0-15 poin
+    Strength Score: 0-21 poin (SEBELUMNYA 0-15 -- naik 6 poin, dipindah
+    dari volatility_score yang dipotong, lihat _score_volatility di bawah)
 
-    ADX: 0-8 poin
+    ADX: 0-8 poin (kekuatan tren, arah belum diperhitungkan)
+    DI Quality (BARU): -3..+6 poin (arah tren, dari +DI/-DI)
     Relative Strength vs IHSG: 0-7 poin
+
+    AUDIT (data 63 sinyal live, 27-31 Jul 2026; RE-VALIDASI di n=140,
+    27 Jul-4 Aug 2026, lihat signal_results): plus_di/minus_di sudah
+    dihitung & disimpan sejak lama tapi TIDAK PERNAH dipakai di scoring.
+    Empiris (n=140): minus_di<10 -> 89.3% win / avg return +11.5%.
+    minus_di>20 -> cuma 65.0% win / avg return +2.8%. Efeknya melunak
+    dibanding estimasi awal n=63 (dulu 90%/+15.5% vs 45.5%/-0.29%) tapi
+    ARAHNYA TETAP KONSISTEN & masih beda jauh antar bucket -- ADX tinggi
+    + minus_di tinggi = tren KUAT tapi ARAHNYA TURUN, itu red flag,
+    bukan alasan nambah skor beli, jadi ADX-nya di-discount kalau itu
+    terjadi. Re-validasi berkala lewat dashboard Score Calibration
+    seiring data live bertambah (target >=300 sinyal).
     """
     score = 0.0
     s = analysis.strength
 
     adx = s.adx
-    if adx >= 40:           score += 8
-    elif adx >= 30:         score += 6
-    elif adx >= 25:         score += 4
-    elif adx >= 20:         score += 2
-    else:                   score += 0
+    if adx >= 40:           adx_pts = 8.0
+    elif adx >= 30:         adx_pts = 6.0
+    elif adx >= 25:         adx_pts = 4.0
+    elif adx >= 20:         adx_pts = 2.0
+    else:                   adx_pts = 0.0
+
+    plus_di, minus_di = s.plus_di, s.minus_di
+    if minus_di > 20 or minus_di > plus_di:
+        # Tekanan jual dominan -> ADX tinggi mengukur kekuatan tren TURUN.
+        adx_pts = min(adx_pts, 2.0)
+    score += adx_pts
+
+    if minus_di < 10 and plus_di > minus_di:
+        score += 6
+    elif minus_di < 15 and plus_di > minus_di:
+        score += 3
+    elif minus_di > 20:
+        score -= 3
 
     rs = s.rel_strength
     if rs >= 10:            score += 7
@@ -502,36 +529,44 @@ def _score_strength(analysis: StockAnalysis) -> float:
     elif rs >= -5:          score += 1
     else:                   score += 0
 
-    return min(score, 15.0)
+    return max(0.0, min(score, 21.0))
 
 
 def _score_volatility(analysis: StockAnalysis, close: float) -> float:
     """
-    Volatility Score: 0-10 poin
+    Volatility Score: 0-4 poin (SEBELUMNYA 0-10 -- dipotong drastis)
 
-    ATR%: moderately volatile = lebih baik dari sangat volatile
+    ATR%: moderately volatile dianggap lebih baik dari sangat volatile
     Bollinger Position: near lower band = potensi rebound
+
+    AUDIT (data 63 sinyal live, 27-31 Jul 2026; RE-VALIDASI di n=140,
+    27 Jul-4 Aug 2026, lihat signal_results): volatility_score adalah
+    prediktor TERKUAT di seluruh fitur di KEDUA sample (korelasi -0.50
+    lalu -0.45 dengan net_return_pct) TAPI ARAHNYA TERBALIK dari asumsi
+    desain semula -- skor rendah (0-4 dari skala lama 0-10) konsisten
+    avg return tertinggi (+12.8% lalu +11.3%), skor menengah (4-7) jauh
+    lebih lemah (+0.7% lalu +3.4%). Pola ini makin kuat tervalidasi
+    dengan sample lebih besar, BUKAN artefak sample kecil. Preferensi
+    ATR%/BB-position di bawah BELUM diubah arahnya (belum divalidasi
+    per-komponen, cuma total volatility_score yang teruji) -- bobotnya
+    saja yang didiskon berat (10->4). JANGAN naikkan bobot ini lagi
+    tanpa re-validasi lewat Score Calibration di dashboard.
     """
     score = 0.0
     vol = analysis.volatility
 
     atr_pct = vol.atr_pct
-    if 1.0 <= atr_pct <= 4.0:    score += 5
-    elif 0.5 <= atr_pct < 1.0:   score += 3
-    elif 4.0 < atr_pct <= 6.0:   score += 2
-    elif atr_pct < 0.5:           score += 1
+    if 1.0 <= atr_pct <= 4.0:    score += 2
+    elif 0.5 <= atr_pct < 1.0:   score += 1
+    elif 4.0 < atr_pct <= 6.0:   score += 1
     else:                          score += 0
 
     bp = vol.bb_position
-    if 0.1 <= bp <= 0.4:         score += 5
-    elif 0.4 < bp <= 0.6:        score += 3
-    elif 0.6 < bp <= 0.8:        score += 1
-    else:                         score += 0
+    if 0.1 <= bp <= 0.4:         score += 2
+    elif 0.4 < bp <= 0.6:        score += 1
+    else:                          score += 0
 
-    if vol.bb_squeeze:
-        score += 2
-
-    return min(score, 10.0)
+    return min(score, 4.0)
 
 
 def _calc_risk_levels(close: float, atr: float, direction: str = "BUY") -> RiskLevels:
@@ -682,8 +717,18 @@ def build_factor_contribution(analysis: 'StockAnalysis', sector_bonus: float = 0
         highlights.append("Outperform IHSG (RS positif)")
     if analysis.momentum.macd_cross == "GOLDEN":
         highlights.append("MACD Golden Cross")
-    if analysis.strength.adx >= 25:
+
+    minus_di = analysis.strength.minus_di
+    plus_di = analysis.strength.plus_di
+    bearish_dominant = minus_di > 20 or minus_di > plus_di
+    if analysis.strength.adx >= 25 and not bearish_dominant:
         highlights.append(f"Trend kuat (ADX {analysis.strength.adx:.0f})")
+    # AUDIT (n=63 -> re-validasi n=140, 27 Jul-4 Aug 2026): minus_di>20
+    # avg return +2.8% vs +11.5% saat minus_di<10 -- lihat _score_strength().
+    if bearish_dominant:
+        highlights.append(f"⚠️ Tekanan Jual Dominan (DI- {minus_di:.0f})")
+    elif minus_di < 10 and plus_di > minus_di:
+        highlights.append("DI Bullish Sehat (DI- rendah)")
     if sector_bonus > 0:
         highlights.append("Sektor sedang memimpin")
 

@@ -378,10 +378,10 @@ def send_market_open_alert(regime) -> bool:
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         result = (
             db.table("signals")
-            .select("ticker,signal_type,composite_score,confidence")
+            .select("ticker,signal_type,raw_score,confidence")
             .in_("signal_type", ["STRONG_BUY", "BUY"])
             .gte("signal_date", yesterday)
-            .order("composite_score", desc=True)
+            .order("raw_score", desc=True)
             .limit(5)
             .execute()
         )
@@ -390,7 +390,7 @@ def send_market_open_alert(regime) -> bool:
             for s in result.data:
                 tk    = _ss(s.get("ticker"), "").replace(".JK", "")
                 st    = _ss(s.get("signal_type"), "").replace("_", " ")
-                sc    = _sf(s.get("composite_score"))
+                sc    = _sf(s.get("raw_score"))
                 conf  = s.get("confidence")
                 se    = "🚀" if s.get("signal_type") == "STRONG_BUY" else "🟢"
                 conf_txt = f" · {_he(conf)}" if conf else ""
@@ -535,7 +535,7 @@ def send_weekly_report(stats: dict) -> bool:
         lines.append("🏆 <b>TOP 5 SINYAL MINGGU INI</b>")
         for i, sig in enumerate(top_signals[:5], 1):
             tk = _ss(sig.get("ticker","")).replace(".JK","")
-            sc = _sf(sig.get("composite_score"))
+            sc = _sf(sig.get("raw_score"))
             st_ = _ss(sig.get("signal_type",""))
             se = SIGNAL_EMOJI.get(st_, "⚪")
             lines.append(f"  #{i} {se} <b>{tk}</b> — Skor {sc:.0f}")

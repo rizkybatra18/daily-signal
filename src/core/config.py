@@ -78,11 +78,16 @@ class Settings(BaseSettings):
     avg_volume_period: int = 20
 
     # ── Composite Scoring Weights (0-100 total) ──────────────────
+    # CATATAN: konstanta ini REFERENSI/DOKUMENTASI -- angka poin aktual
+    # di-hardcode langsung di masing-masing fungsi _score_*() di
+    # ta_engine.py (dan versi cermin di backtest/engine.py::_score_row).
+    # Kalau ubah bobot di sini, WAJIB ubah juga cap poin di kedua tempat
+    # itu supaya tidak jadi dokumentasi bohong.
     weight_trend: float = 30.0       # EMA alignment + price vs EMA
     weight_momentum: float = 25.0    # RSI + MACD
     weight_volume: float = 20.0      # Volume ratio + spike
-    weight_strength: float = 15.0    # ADX + Relative Strength
-    weight_volatility: float = 10.0  # ATR position
+    weight_strength: float = 21.0    # ADX (arah-aware) + DI quality + Relative Strength
+    weight_volatility: float = 4.0   # ATR position -- didiskon dari 10, lihat AUDIT di _score_volatility()
 
     # ── Signal Thresholds (BULL / default baseline) ──────────────
     score_strong_buy: float = 75.0   # >= 75 → STRONG_BUY

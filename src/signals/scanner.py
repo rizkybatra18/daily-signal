@@ -142,7 +142,12 @@ def run_daily_scan(
         passed = [a for a in analyses if a.passed_basic_filter]
         technical_pass_count = len(passed)
 
-        passed.sort(key=lambda a: a.score.final_score, reverse=True)
+        # AUDIT: sort pakai raw_score (bukan final_score) biar konsisten
+        # dengan klasifikasi signal_type & ranking di dashboard/telegram
+        # -- lihat _determine_signal_type(). Dalam 1x scan run hasilnya
+        # identik (regime_weight sama utk semua kandidat di run yg sama),
+        # tapi raw_score lebih jelas maknanya utk pembaca kode.
+        passed.sort(key=lambda a: a.score.raw_score, reverse=True)
 
         strong_buy = [a for a in passed if a.score.signal_type == "STRONG_BUY"]
         buy = [a for a in passed if a.score.signal_type == "BUY"]
@@ -300,8 +305,7 @@ def _load_batch_from_db(
 
     for i in range(0, len(tickers), batch_size):
         batch = tickers[i:i + batch_size]
-        log.info(f"[DEBUG] Batch {i//batch_size+1} request first = {batch[0]}")
-        log.info(f"[DEBUG] Batch {i//batch_size+1} request last  = {batch[-1]}")
+        batch_no = i // batch_size + 1
         for attempt in range(3):
             try:
                 db = get_db()
@@ -315,14 +319,12 @@ def _load_batch_from_db(
                     .range(0, 100000)
                     .execute()
                 )
-                if res.data:
-                    returned = sorted({r["ticker"] for r in res.data})
-                    log.info(f"[DEBUG] Returned ticker count = {len(returned)}")
-                    log.info(f"[DEBUG] Returned first 20 = {returned[:20]}")
-                log.info(f"[DEBUG] res.count = {getattr(res, 'count', None)}")
-                log.info(f"[DEBUG] len(res.data) = {len(res.data) if res.data else 0}")
-                log.info(f"[DEBUG] first row = {res.data[0] if res.data else None}")
-                log.info(f"[DEBUG] Batch {i//batch_size+1}: returned {len(res.data or [])} rows")
+                n_returned = len(res.data) if res.data else 0
+                n_tickers_returned = len({r["ticker"] for r in res.data}) if res.data else 0
+                log.debug(
+                    f"Batch {batch_no} ({batch[0]}..{batch[-1]}): "
+                    f"{n_returned} baris dari {n_tickers_returned}/{len(batch)} ticker"
+                )
                 all_rows.extend(res.data or [])
                 _time.sleep(0.3)   # jeda antar batch
                 break
@@ -331,7 +333,7 @@ def _load_batch_from_db(
                     _time.sleep((attempt + 1) * 1.5)
                 else:
                     log.warning(
-                        f"Batch {i//batch_size+1} gagal load setelah 3x: {str(e)[:80]}"
+                        f"Batch {batch_no} gagal load setelah 3x: {str(e)[:80]}"
                     )
 
     if not all_rows:
@@ -340,8 +342,7 @@ def _load_batch_from_db(
 
     df_all = pd.DataFrame(all_rows)
     df_all["trade_date"] = pd.to_datetime(df_all["trade_date"])
-    log.info(f"[DEBUG] Total rows loaded: {len(df_all)}")
-    log.info(f"[DEBUG] AGRO.JK rows in df_all: {len(df_all[df_all['ticker']=='AGRO.JK'])}")
+    log.debug(f"Total baris ter-load: {len(df_all)} ({df_all['ticker'].nunique()} ticker unik)")
 
     for ticker in tickers:
         df_t = df_all[df_all["ticker"] == ticker].copy()
@@ -354,12 +355,10 @@ def _load_batch_from_db(
         df_t = df_t.dropna(subset=["close"])
         if not df_t.empty:
             results[ticker] = df_t
-    log.info(f"[DEBUG] results tickers = {len(results)}")
-    log.info(f"[DEBUG] unique tickers df_all = {df_all['ticker'].nunique()}")
 
     missing = sorted(set(tickers) - set(results.keys()))
-    log.info(f"[DEBUG] missing ticker count = {len(missing)}")
-    log.info(f"[DEBUG] first missing = {missing[:20]}")
+    if missing:
+        log.info(f"{len(missing)}/{len(tickers)} ticker tidak ada data OHLCV cukup: {missing[:20]}{'...' if len(missing) > 20 else ''}")
 
     return results
 

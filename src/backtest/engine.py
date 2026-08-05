@@ -21,11 +21,13 @@ TAPI ditemukan 3 masalah REALISME EKSEKUSI yang sudah diperbaiki:
      LEBIH DULU (asumsi konservatif standar dalam backtesting).
   3. SCORING BACKTEST BEDA DENGAN SCORING LIVE — versi lama memakai
      skala 0-60 dengan bobot berbeda dari composite scoring live
-     (0-100, bobot 30/25/20/15/10). Akibatnya backtest sebenarnya
-     memvalidasi strategi yang BERBEDA dari yang benar-benar dipakai
-     live. Diperbaiki: _score_row() kini meniru persis pita nilai
-     _score_trend/_score_momentum/_score_volume/_score_strength/
-     _score_volatility di ta_engine.py (total tetap 0-100).
+     (0-100). Akibatnya backtest sebenarnya memvalidasi strategi yang
+     BERBEDA dari yang benar-benar dipakai live. Diperbaiki: _score_row()
+     kini meniru persis pita nilai _score_trend/_score_momentum/
+     _score_volume/_score_strength/_score_volatility di ta_engine.py
+     (total tetap 0-100, bobot terkini 30/25/20/21/4 -- lihat AUDIT
+     note di _score_strength/_score_volatility ta_engine.py soal kenapa
+     15/10 berubah jadi 21/4).
 
 Metrik output:
     Win Rate, Profit Factor, Expectancy, Sharpe, Sortino,
@@ -136,6 +138,8 @@ def _add_indicators(df: pd.DataFrame, ihsg_close: Optional[pd.Series] = None) ->
     # Strength
     adx, plus_di, minus_di = calc_adx(df, settings.adx_period)
     df["adx"] = adx
+    df["plus_di"] = plus_di
+    df["minus_di"] = minus_di
     if ihsg_close is not None and not ihsg_close.empty:
         df["rel_strength"] = calc_mansfield_rs(close, ihsg_close, period=20).fillna(0)
     else:
@@ -289,21 +293,38 @@ def _score_row(row: pd.Series) -> tuple[float, int]:
 
     volume_score = min(volume_score, 20.0)
 
-    # ── Strength (0-15) ───────────────────────────────────────────
+    # ── Strength (0-21) ───────────────────────────────────────────
+    # AUDIT (selaras ta_engine.py::_score_strength, n=63 -> re-validasi
+    # n=140, 27 Jul-4 Aug 2026): DI quality ditambahkan, cap naik 15->21.
     adx = row.get("adx", 0) or 0
+    plus_di = row.get("plus_di", 0) or 0
+    minus_di = row.get("minus_di", 0) or 0
     rel_strength = row.get("rel_strength", 0) or 0
     strength_score = 0.0
 
     if adx >= 40:
-        strength_score += 8
-        conditions += 1
+        adx_pts = 8.0
     elif adx >= 30:
-        strength_score += 6
-        conditions += 1
+        adx_pts = 6.0
     elif adx >= 25:
-        strength_score += 4
+        adx_pts = 4.0
     elif adx >= 20:
-        strength_score += 2
+        adx_pts = 2.0
+    else:
+        adx_pts = 0.0
+
+    if minus_di > 20 or minus_di > plus_di:
+        adx_pts = min(adx_pts, 2.0)
+    strength_score += adx_pts
+    if adx_pts >= 4.0:
+        conditions += 1
+
+    if minus_di < 10 and plus_di > minus_di:
+        strength_score += 6
+    elif minus_di < 15 and plus_di > minus_di:
+        strength_score += 3
+    elif minus_di > 20:
+        strength_score -= 3
 
     if rel_strength >= 10:
         strength_score += 7
@@ -314,34 +335,29 @@ def _score_row(row: pd.Series) -> tuple[float, int]:
     elif rel_strength >= -5:
         strength_score += 1
 
-    strength_score = min(strength_score, 15.0)
+    strength_score = max(0.0, min(strength_score, 21.0))
 
-    # ── Volatility (0-10) ─────────────────────────────────────────
+    # ── Volatility (0-4) ──────────────────────────────────────────
+    # AUDIT (selaras ta_engine.py::_score_volatility, n=63 -> re-validasi
+    # n=140, 27 Jul-4 Aug 2026): volatility_score prediktor terkuat di
+    # kedua sample tapi arahnya terbalik dari desain -- bobot didiskon 10->4.
     atr_pct = row.get("atr_pct", 0) or 0
     bb_position = row.get("bb_position", 0.5)
-    bb_squeeze = bool(row.get("bb_squeeze", False))
     volatility_score = 0.0
 
     if 1.0 <= atr_pct <= 4.0:
-        volatility_score += 5
-    elif 0.5 <= atr_pct < 1.0:
-        volatility_score += 3
-    elif 4.0 < atr_pct <= 6.0:
         volatility_score += 2
-    elif atr_pct < 0.5:
+    elif 0.5 <= atr_pct < 1.0:
+        volatility_score += 1
+    elif 4.0 < atr_pct <= 6.0:
         volatility_score += 1
 
     if 0.1 <= bb_position <= 0.4:
-        volatility_score += 5
+        volatility_score += 2
     elif 0.4 < bb_position <= 0.6:
-        volatility_score += 3
-    elif 0.6 < bb_position <= 0.8:
         volatility_score += 1
 
-    if bb_squeeze:
-        volatility_score += 2
-
-    volatility_score = min(volatility_score, 10.0)
+    volatility_score = min(volatility_score, 4.0)
 
     total = trend_score + momentum_score + volume_score + strength_score + volatility_score
     return round(total, 2), conditions
