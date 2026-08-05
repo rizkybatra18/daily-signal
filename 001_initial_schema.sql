@@ -1,0 +1,137 @@
+name: "Daily Signal — Daily Scan"
+
+on:
+  # Trigger utama: dari cron-job.org via GitHub API (on-time, reliable)
+  repository_dispatch:
+    types: [daily_scan]
+
+  # Fallback: GitHub cron
+  schedule:
+    - cron: "29 10 * * 1-5"   # 10:30 UTC = 17:30 WIB
+
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Mode"
+        required: true
+        default: "full_scan"
+        type: choice
+        options:
+          - full_scan
+          - health_check
+          - test_telegram
+
+jobs:
+
+  # ── FULL DAILY SCAN ──────────────────────────────────────────────
+  daily_scan:
+    name: "📊 Full Daily Scan"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'repository_dispatch' ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.event.inputs.mode == 'full_scan')
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      APP_ENV: production
+      LOG_LEVEL: INFO
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: "📦 Install Dependencies"
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          python -c "import yfinance, pandas, numpy, supabase, requests; print('✅ OK')"
+
+      - name: "📁 Logs Directory"
+        run: mkdir -p logs
+
+      - name: "🏥 Health Check"
+        run: python -m src.runner health_check
+
+      - name: "📊 Full Daily Scan"
+        run: python -m src.runner daily_scan
+
+      - name: "💼 Update Portfolio"
+        run: python -m src.runner update_portfolio
+        continue-on-error: true
+
+      - name: "📸 Portfolio Snapshot"
+        run: python -m src.runner portfolio_snapshot
+        continue-on-error: true
+
+      - name: "📋 Upload Logs"
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scan-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 7
+
+  # ── HEALTH CHECK ─────────────────────────────────────────────────
+  health_check:
+    name: "🏥 Health Check"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.mode == 'health_check'
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      APP_ENV: production
+      LOG_LEVEL: INFO
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install --upgrade pip && pip install -r requirements.txt
+      - run: mkdir -p logs
+      - run: python -m src.runner health_check
+
+  # ── TEST TELEGRAM ─────────────────────────────────────────────────
+  test_telegram:
+    name: "📱 Test Telegram"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.mode == 'test_telegram'
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      APP_ENV: production
+      LOG_LEVEL: INFO
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install --upgrade pip && pip install -r requirements.txt
+      - run: mkdir -p logs
+      - run: python -m src.runner test_telegram

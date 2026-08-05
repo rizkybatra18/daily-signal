@@ -1,288 +1,176 @@
-# 📈 DAILY SIGNAL — BEI Stock Scanner
-
-**Sistem sinyal trading saham BEI yang berjalan 100% otomatis dan gratis.**
-
-[![GitHub Actions](https://img.shields.io/badge/scheduler-GitHub%20Actions-2088FF?logo=github)](https://github.com)
-[![Supabase](https://img.shields.io/badge/database-Supabase-3ECF8E?logo=supabase)](https://supabase.com)
-[![Streamlit](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B?logo=streamlit)](https://streamlit.io)
-[![Python](https://img.shields.io/badge/python-3.11+-blue?logo=python)](https://python.org)
+# DAILY SIGNAL — Changelog
 
 ---
 
-## ✨ Fitur Utama
+## v2.2.0 — Kalibrasi Scoring dari Data Live + Konsistensi raw_score (2026-08)
 
-| Fitur | Status | Keterangan |
-|-------|--------|------------|
-| 🌐 Universe Manager | ✅ | Auto-scan seluruh saham BEI |
-| 📊 TA Engine | ✅ | EMA, RSI, MACD, ADX, ATR deterministik |
-| 🎯 Composite Scoring | ✅ | Skor 0-100 berbasis rule (bukan AI) |
-| 🏛️ Market Regime | ✅ | Deteksi BULL/SIDEWAYS/BEAR |
-| 🏭 Sector Rotation | ✅ | Ranking 11 sektor BEI |
-| 📐 Relative Strength | ✅ | Mansfield RS vs IHSG |
-| ⚖️ Risk Management | ✅ | Entry/SL/TP otomatis berbasis ATR |
-| 📱 Telegram Bot | ✅ | Notifikasi sinyal & TP/SL hit |
-| 📊 Dashboard | ✅ | Streamlit modern, akses dari HP |
-| 💼 Portfolio Tracker | ✅ | Unrealized/Realized PnL |
-| 📖 Trade Journal | ✅ | Alasan entry/exit, screenshot |
-| 🔬 Backtesting | ✅ | Walk-forward, no look-ahead bias |
-| 🗄️ Database | ✅ | Supabase PostgreSQL (gratis) |
-| ⚙️ Auto Scheduler | ✅ | GitHub Actions (gratis, 2000 menit/bulan) |
-| 🔍 Structured Logging | ✅ | Log ke database, level INFO-CRITICAL |
+Basis: analisis empiris 63 sinyal `signal_results` CLOSED (27-31 Jul 2026),
+**re-validasi di n=140** (27 Jul - 4 Aug 2026) sebelum implementasi — lihat
+bagian "Validasi n=140" di bawah.
 
----
+### 🎯 Scoring (`src/signals/ta_engine.py`, dicerminkan di `src/backtest/engine.py`)
+- **`volatility_score`: bobot dipotong 10 → 4 poin.** Prediktor terkuat di
+  seluruh fitur, di KEDUA sample (korelasi -0.50 lalu -0.45 dgn net_return_pct),
+  arahnya terbalik dari desain: skor rendah avg return +12.8% lalu +11.3%,
+  skor menengah cuma +0.7% lalu +3.4%. Pola makin kuat tervalidasi dgn sample
+  lebih besar. Didiskon berat sampai ada cukup data buat re-validasi per-komponen
+  (ATR%/BB-position).
+- **`strength_score`: bobot naik 15 → 21 poin, tambah DI Quality.** `plus_di`/`minus_di`
+  sudah dihitung & disimpan sejak lama tapi tidak pernah dipakai scoring. Empiris
+  (n=140): `minus_di<10` → 89.3% win/+11.5% avg. `minus_di>20` → 65.0% win/+2.8% avg.
+  Efeknya melunak dibanding estimasi awal n=63 (dulu 90%/+15.5% vs 45.5%/-0.29%) tapi
+  arahnya tetap konsisten. ADX tinggi kini di-discount kalau `minus_di` dominan
+  (tren kuat tapi arahnya turun bukan alasan nambah skor).
+- Total tetap 0-100 (30/25/20/21/4). `config.py::weight_*` disinkronkan (masih dokumentasi,
+  belum live-wired — lihat catatan baru di situ).
+- `build_factor_contribution()`: highlight baru "⚠️ Tekanan Jual Dominan" / "DI Bullish Sehat";
+  highlight "Trend kuat (ADX)" tidak lagi muncul kalau trennya ternyata bearish-dominant.
+- `backtest/engine.py::_add_indicators()`: `plus_di`/`minus_di` kini disimpan sbg kolom
+  (sebelumnya cuma `adx` — bikin `_score_row()` versi lama tidak bisa akses DI sama sekali).
 
-## 🏗️ Arsitektur
+### 🐛 Konsistensi raw_score vs final_score (composite_score)
+`final_score` sejak v2.1 sudah bukan dasar klasifikasi sinyal (lihat `_determine_signal_type`),
+tapi 3 tempat masih pakai `composite_score` (final_score) buat ranking/filter/tampilan:
+- `dashboard.py`: `load_signals()`/`load_signals_range()` ORDER BY, slider "Skor Minimum" filter,
+  badge skor di list & detail sinyal, gauge breakdown (max value disesuaikan ke 21/4 juga).
+- `src/telegram/bot.py`: pesan "Sinyal Aktif dari Kemarin" & "Top 5 Sinyal Minggu Ini".
+- `src/signals/scanner.py`: sort kandidat pakai `raw_score` (identik hasil dgn `final_score`
+  dalam 1x scan run karena `regime_weight` sama utk semua kandidat, tapi lebih jelas maknanya).
 
-```
-GitHub Repository
-       │
-       ▼
-GitHub Actions (Cron: Senin-Jumat 17:30 WIB)
-       │
-       ▼
-Universe Manager → Seluruh saham BEI (800+)
-       │
-       ▼
-Incremental Data Update (hanya download yang belum ada)
-       │
-       ▼
-Supabase PostgreSQL (12 tabel)
-       │
-  ┌────┼────┐
-  ▼    ▼    ▼
-TA   Regime  Sector
-Engine Engine  Engine
-  │    │    │
-  └────┼────┘
-       │
-  Composite Score (0-100)
-  STRONG_BUY / BUY / WATCHLIST / AVOID
-       │
-  ┌────┴────┐
-  ▼         ▼
-Telegram  Dashboard
-  Bot      Streamlit
-```
+  *(Catatan kejujuran: alasan utama fix ini adalah KONSISTENSI DESAIN — raw_score yang
+  benar-benar dipakai `_determine_signal_type()`, bukan klaim "raw_score jauh lebih
+  prediktif". Di re-validasi n=140, korelasi raw_score (0.086) dan final_score (0.011)
+  sama-sama lemah — gap-nya menyempit dibanding estimasi awal n=63. Fix ini tetap
+  dipertahankan atas dasar konsistensi, bukan atas dasar keunggulan prediktif raw_score.)*
 
----
+### 🧹 Housekeeping
+- `scanner.py::_load_batch_from_db()`: hapus log `[DEBUG]` verbose sisa debugging (termasuk
+  satu baris yang hardcode cek ticker `AGRO.JK`), turunkan sisanya ke `log.debug()`.
 
-## 🚀 Quick Start (30 Menit)
+### 🖥️ Dashboard — Signal Performance
+- **BARU: "Detail Per Saham"** — breakdown per-ticker dari `signal_results` (n, win rate,
+  avg/total return, best/worst, avg holding), dgn filter minimal jumlah sinyal biar tidak
+  kepancing sampel n=1. Sebelumnya cuma ada agregat + backtest summary (sumber data terpisah).
+- **BARU: "Score Calibration"** — bar chart avg return per bucket utk `raw_score`,
+  `volatility_score`, `minus_di`, `adx`. Tujuannya supaya validasi "apakah skor benar-benar
+  prediktif" bisa dicek kapan saja langsung dari dashboard, tidak perlu analisis CSV manual lagi.
 
-### 1. Fork/Clone Repository
+### ✅ Validasi n=140 (27 Jul - 4 Aug 2026, sebelum implementasi ke production)
+Data closed bertambah dari 63 → 140 baris (697 total, 557 masih OPEN) sebelum
+perubahan di atas benar-benar di-deploy. Hasil re-cek:
 
-```bash
-git clone https://github.com/USERNAME/daily-signal.git
-cd daily-signal
-```
+| Temuan | Status |
+|---|---|
+| `volatility_score` prediktor terkuat, arah terbalik | ✅ Makin kuat (korelasi -0.50→-0.45, bucket rendah tetap ~2x lipat return bucket menengah) |
+| Rule gabungan (`volatility_score≤4` + `minus_di<20` + `adx≥25` + bukan Energy) | ✅ Makin kuat (n=20→35, 90%/15.9% → 91.4%/15.1% win/avg, p<0.0001) |
+| Regime SIDEWAYS > BULL | ✅ Konsisten (81.5% vs 75.7% win rate) |
+| `minus_di>20` = bucket terlemah | ✅ Arah konsisten, tapi ⚠️ efeknya melunak (lihat tabel di atas) |
+| Sektor Energy sangat jelek (0% win, n=5) | ⚠️ Melunak jadi avg -0.09% (n=16) — masih terlemah tapi tidak seekstrem awal, sebagian besar itu noise sampel kecil |
+| "raw_score jauh lebih prediktif dari final_score" | ❌ **Dikoreksi** — korelasi keduanya sama-sama lemah di n=140 (0.086 vs 0.011). Fix konsistensi tetap jalan, tapi bukan atas alasan ini |
+| "ADX sweet spot 35-45" (dari analisis pertama) | ❌ **Tidak terbukti** — data n=140 malah monoton bersih, ADX 40+ jadi bucket terbaik (87% win). Untungnya scoring ADX magnitude tidak diubah di fix ini, jadi tidak ada kontradiksi kode |
 
-### 2. Setup Supabase
+**Belum diimplementasikan** (kandidat perbaikan lanjutan, bukan bagian rilis ini):
+`plus_di` kini juga menunjukkan pola monoton bersih (0-20→+2.7%, 40+→+17.7% avg) —
+berpotensi jadi bonus eksplisit di `_score_strength()`, belum ditambahkan.
 
-1. Buka [supabase.com](https://supabase.com) → New Project
-2. Buka **SQL Editor** → Paste isi file `migrations/001_initial_schema.sql` → Run
-3. Pergi ke **Settings → API**:
-   - Copy `Project URL` → ini adalah `SUPABASE_URL`
-   - Copy `service_role` key → ini adalah `SUPABASE_SERVICE_KEY`
-
-### 3. Setup Telegram Bot
-
-1. Cari **@BotFather** di Telegram → `/newbot` → ikuti instruksi
-2. Copy token → ini adalah `TELEGRAM_BOT_TOKEN`
-3. Tambahkan bot ke grup/channel Anda
-4. Kirim pesan ke grup → buka `https://api.telegram.org/bot{TOKEN}/getUpdates`
-5. Cari `"chat":{"id":-100xxxxxxx}` → ini adalah `TELEGRAM_CHAT_ID`
-
-### 4. Setup GitHub Secrets
-
-Di repository GitHub: **Settings → Secrets → Actions → New repository secret**
-
-Tambahkan 4 secrets:
-| Secret | Nilai |
-|--------|-------|
-| `SUPABASE_URL` | URL dari Supabase |
-| `SUPABASE_SERVICE_KEY` | Service role key |
-| `TELEGRAM_BOT_TOKEN` | Token dari BotFather |
-| `TELEGRAM_CHAT_ID` | Chat ID grup/channel |
-
-### 5. Aktifkan GitHub Actions
-
-Push ke repository → Pergi ke tab **Actions** → Enable workflows
-
-### 6. Setup Streamlit Dashboard
-
-1. Buka [share.streamlit.io](https://share.streamlit.io) → Connect GitHub
-2. Pilih repository ini → `dashboard.py`
-3. Di **Advanced Settings → Secrets**, tambahkan:
-
-```toml
-SUPABASE_URL = "https://xxx.supabase.co"
-SUPABASE_SERVICE_KEY = "eyJ..."
-TELEGRAM_BOT_TOKEN = "1234:xxx"
-TELEGRAM_CHAT_ID = "-100xxx"
-```
-
-4. Deploy → Dashboard Anda siap!
-
-### 7. Test Manual (Opsional)
-
-```bash
-pip install -r requirements.txt
-cp .env.example .env
-# Edit .env dengan nilai yang benar
-
-# Test health check
-python -m src.runner health_check
-
-# Test scan manual (tanpa Telegram)
-python -m src.runner daily_scan --no-telegram
-```
+Re-validasi berkala lewat dashboard Score Calibration tetap dianjurkan begitu data
+live bertambah (target ≥300 sinyal).
 
 ---
 
-## 📊 Cara Membaca Sinyal
+## v2.1.0 — Audit Menyeluruh: Universe, Adaptive Threshold, Backtest Realism (2026-07)
 
-### Signal Types
+Lihat `AUDIT_REPORT_v2.md` untuk laporan lengkap dengan bukti empiris tiap perubahan.
 
-| Sinyal | Score | Artinya |
-|--------|-------|---------|
-| 🚀 STRONG_BUY | ≥ 75 | Semua indikator selaras, volume konfirmasi |
-| 🟢 BUY | 60-74 | Setup bagus, layak trading |
-| 👀 WATCHLIST | 45-59 | Menarik tapi belum konfirmasi |
-| 🔴 AVOID | < 45 | Tidak memenuhi kriteria |
+### 🌐 Universe Manager
+- Curated seed diperluas dari ~140 → **551 ticker unik** (11 sektor IDX-IC), setelah riset
+  konfirmasi bahwa scraping idx.co.id langsung melanggar ToS resmi mereka DAN diblokir bot
+  detection — solusi via Yahoo Finance validation tetap dipertahankan sebagai satu-satunya
+  sumber otomatis yang legal & stabil.
+- `EXTRA_UNIVERSE_SOURCE_URL` (opsional) — tambah ticker dari sumber pilihan sendiri tanpa edit kode.
+- Safety guard baru: mencegah gangguan Yahoo Finance sesaat disalahartikan sebagai delisting massal.
 
-### Composite Score (0-100)
+### 🎯 Adaptive Threshold (Fix Signifikan)
+- **STRONG_BUY yang sebelumnya matematis MUSTAHIL saat regime BEAR** (dan nyaris mustahil saat
+  SIDEWAYS) kini bisa tercapai untuk setup yang benar-benar kuat, lewat threshold per-regime
+  yang dibandingkan ke raw_score (bukan raw×regime_weight terhadap threshold tetap).
+- Sector bonus kini diterapkan ke raw_score (bukan final_score yang sudah ter-diskon regime weight)
+  — konsisten antar semua kondisi market.
 
-```
-Trend Score     (0-30): EMA alignment, posisi vs EMA
-Momentum Score  (0-25): RSI zone, MACD direction & crossover
-Volume Score    (0-20): Volume ratio, volume spike
-Strength Score  (0-15): ADX trend strength, RS vs IHSG
-Volatility Score(0-10): ATR position, Bollinger Band
-─────────────────────────────────────────────────
-Total Raw       (0-100)
-× Regime Weight (0.4 / 0.75 / 1.0)
-= Final Score   (0-100)
-```
+### 📊 Market Breadth, Confidence Engine, Factor Contribution
+- `breadth_data` yang sebelumnya parameter mati (tidak pernah terisi karena urutan pipeline)
+  kini dihitung nyata dari % saham di atas EMA20/50/200 + advance/decline.
+- Confidence Engine rule-based (Very High/High/Medium/Low) berdasar raw_score + jumlah dimensi kuat.
+- Factor Contribution breakdown + highlights disiapkan untuk Dashboard/Telegram (data-only, UI belum diubah).
 
-### Risk Management
+### 🔬 Backtest Engine
+- Entry kini di open H+1 (bukan close hari sinyal) — realistis sesuai jadwal kirim sinyal 17:30 WIB.
+- Resolusi SL/TP dalam candle yang sama kini konservatif (SL diperiksa lebih dulu).
+- Skema scoring backtest diselaraskan persis dengan composite scoring live (0-100, 5 dimensi).
 
-Semua level berbasis ATR (Average True Range):
-- **Entry**: Harga close saat sinyal
-- **Stop Loss**: Entry − (1.5 × ATR)  → risiko ~1.5 ATR
-- **Target 1**: Entry + (1.5 × ATR)  → R:R = 1:1
-- **Target 2**: Entry + (2.5 × ATR)  → R:R = 1:1.67
+### 🛡️ Error Handling
+- `_upsert_with_schema_fallback()` — mencegah 1 kolom baru menggagalkan seluruh insert (kelas bug
+  yang sama dengan insiden 87 sinyal gagal tersimpan sebelumnya).
+- `validate_ohlcv` kini menolak candle terbalik dan data tanpa volume sama sekali.
 
-Position sizing: Maksimal 1% risiko modal per trade.
+### 🗄️ Database
+- `migrations/002_audit_improvements.sql` — additive, aman dijalankan kapan saja, tidak merusak data lama.
 
----
-
-## 🏛️ Market Regime
-
-| Regime | IHSG Condition | Scoring Weight | Aksi |
-|--------|----------------|----------------|------|
-| 📈 BULL | > EMA20, RSI > 55, 5D > +1% | 1.0 (normal) | Semua sinyal aktif |
-| ↔️ SIDEWAYS | Mixed signals | 0.75 (-25%) | Selektif |
-| 📉 BEAR | < EMA20, RSI < 40, 5D < -3% | 0.4 (-60%) | Suppress sinyal |
+### ✅ Testing
+- 49/49 test lulus (naik dari 46/49 — 3 bug pre-existing ikut diperbaiki), 0 regresi.
 
 ---
 
-## 📂 Struktur Project
+## v2.0.0 — Dashboard Upgrade (2025-06-25)
 
-```
-daily_signal/
-├── .env.example                   # Template environment variables
-├── .github/
-│   └── workflows/
-│       ├── daily_scan.yml         # Scan harian + pre-market alert
-│       └── weekly_maintenance.yml # Maintenance & refresh universe
-├── migrations/
-│   └── 001_initial_schema.sql    # Database schema (12 tabel)
-├── src/
-│   ├── core/
-│   │   ├── config.py             # Settings dari env vars
-│   │   ├── database.py           # Supabase connection & CRUD
-│   │   └── logger.py             # Structured logging
-│   ├── providers/
-│   │   ├── universe_manager.py   # Auto-discover saham BEI
-│   │   └── market_data.py        # Provider abstraction (Yahoo Finance)
-│   ├── signals/
-│   │   ├── ta_engine.py          # TA indicators + composite scoring
-│   │   ├── regime_engine.py      # Market regime detection
-│   │   ├── sector_engine.py      # Sector rotation
-│   │   └── scanner.py            # Main scan orchestrator
-│   ├── telegram/
-│   │   └── bot.py                # Telegram notifications
-│   ├── portfolio/
-│   │   └── tracker.py            # Portfolio & PnL tracking
-│   ├── backtest/
-│   │   └── engine.py             # Backtesting framework
-│   └── runner.py                 # CLI entry point
-├── tests/
-│   ├── unit/test_core.py         # Unit tests
-│   └── smoke/test_smoke.py       # Smoke tests
-├── dashboard.py                  # Streamlit dashboard
-├── requirements.txt
-├── pyproject.toml                # Pytest config
-├── AUDIT_REPORT.md               # Laporan audit sistem lama
-└── README.md
-```
+### 🆕 Pages Baru
+- **Why This Signal?** — breakdown score per komponen (bar chart), detail semua indikator,
+  dan interpretasi otomatis dalam bahasa Indonesia untuk Trend / Momentum / Volume / Strength / Volatility.
+  Bisa diakses langsung dari tombol "Detail" di Top Signals.
+- **Historical Signals** — tabel sinyal 7/14/30/60/90 hari terakhir, filterable by date/ticker/sector/type,
+  distribusi sinyal (pie chart + bar chart per sektor), download CSV.
+- **Signal Performance** — KPI utama (win rate, profit factor, expectancy, max drawdown),
+  equity curve, win/loss pie, distribusi return histogram, monthly PnL bar chart, backtest summary table.
+
+### ✨ Upgrade Pages Existing
+- **Market Overview** — regime card dengan deskripsi teks, sparkline IHSG 30 hari
+  dengan color-coded dots (🟢🟡🔴), A/D ratio, top/worst sektor, top 3 sinyal hari ini.
+- **Top Signals** — tabel custom dengan score progress bar, signal badge warna,
+  volume ratio color (hijau/kuning/merah), RS% color, tombol "Detail" per baris, download CSV.
+- **Sector Rotation** — leaderboard dengan medal 🥇🥈🥉, score bar per sektor,
+  return heatmap (1D/5D/20D), bubble chart momentum vs breadth.
+- **Portfolio** — styled dataframe dengan warna PnL hijau/merah.
+- **System Logs** — filter by level, color-coded messages.
+
+### 🔧 Fixes & Robustness
+- Semua nilai DB dikonversi via `sf()` / `si()` / `ss()` — tidak ada lagi TypeError dari None.
+- `score_color()` dan `signal_badge()` dipakai konsisten di semua halaman.
+- Navigation "Detail" dari Top Signals → Why This Signal? via `session_state`.
+- Sidebar menampilkan regime + IHSG live.
+
+### 📋 Backward Compatibility
+- Tidak ada perubahan pada scanner, scoring engine, database schema, atau workflow.
+- Semua query menggunakan kolom yang sudah ada sejak v1.0.
 
 ---
 
-## 🔄 Jadwal Otomatis
+## v1.3.0 (2025-06-25)
+- Fix SyntaxError di bot.py (unterminated string literal line 408)
+- Tulis ulang bot.py menggunakan string concatenation
 
-| Waktu (WIB) | Event | Keterangan |
-|-------------|-------|------------|
-| 08:30 | Pre-Market Alert | Kirimi kondisi IHSG + regime ke Telegram |
-| 17:30 | Daily Scan | Scan semua saham, kirim sinyal |
-| 17:35 | Portfolio Update | Update harga posisi aktif |
-| 17:40 | Portfolio Snapshot | Simpan equity curve harian |
-| Sabtu 09:00 | Weekly Maintenance | Cleanup DB + refresh universe + backtest |
+## v1.2.0 (2025-06-25)
+- Workflow dipecah menjadi 3 job terpisah (pre_market / daily_scan / health_check)
+- Pre-market alert sekarang tampilkan sinyal aktif dari kemarin
+- Fix kondisi `if` di GitHub Actions yang tidak reliable
 
----
+## v1.1.0 (2025-06-21)
+- Hapus pandas-ta (package mati, tidak pernah digunakan)
+- Fix yfinance MultiIndex column handling
+- Health check tidak lagi exit(1) untuk warning non-kritis
+- Tambah migrations/000_check_migration.sql
+- Tambah TROUBLESHOOTING.md
 
-## 🔧 Maintenance
-
-### Update Universe (auto setiap Sabtu)
-```bash
-python -m src.runner refresh_universe
-```
-
-### Backup Database
-Supabase menyediakan backup otomatis (pro tier) atau export manual:
-1. Supabase Dashboard → Settings → Backups
-2. Atau gunakan: `pg_dump $(supabase db url)` via CLI
-
-### Troubleshooting
-
-**Scan tidak berjalan:**
-1. Cek GitHub Actions → tab Actions → lihat workflow run terbaru
-2. Pastikan secrets sudah diisi dengan benar
-3. Cek system_logs di Supabase Dashboard
-
-**Telegram tidak menerima pesan:**
-1. Cek apakah bot sudah di-add ke grup
-2. Cek `TELEGRAM_CHAT_ID` — harus diawali `-100` untuk grup
-3. Test: `python -m src.runner health_check`
-
-**Data tidak terupdate:**
-1. Cek koneksi Supabase: `python -m src.runner health_check`
-2. Cek GitHub Actions logs
-3. Yahoo Finance mungkin rate limit — coba lagi 1 jam kemudian
-
----
-
-## ⚠️ Disclaimer
-
-**DAILY SIGNAL adalah alat bantu analisis teknikal, BUKAN rekomendasi investasi.**
-
-- Selalu lakukan riset mandiri (DYOR)
-- Gunakan money management yang ketat
-- Tidak ada sistem yang 100% akurat
-- Investasi dan trading mengandung risiko kehilangan modal
-- Sistem ini tidak bertanggung jawab atas keputusan investasi Anda
-
----
-
-## 📜 License
-
-MIT License — Bebas digunakan dan dimodifikasi untuk keperluan pribadi.
+## v1.0.0 (2025-06-19)
+- Initial release: Universe Manager, TA Engine, Regime Engine,
+  Sector Engine, Scanner, Telegram Bot, Portfolio Tracker,
+  Backtest Framework, Streamlit Dashboard, GitHub Actions workflow
