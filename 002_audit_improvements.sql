@@ -1,17 +1,23 @@
-name: "Daily Signal — Weekly Maintenance"
+name: "Daily Signal — Pre-Market Alert"
 
 on:
+  # Trigger utama: dari cron-job.org via GitHub API (on-time, reliable)
+  repository_dispatch:
+    types: [pre_market]
+
+  # Fallback: GitHub cron (mungkin delay, tapi ada sebagai backup)
   schedule:
-    - cron: "0 2 * * 6"    # 02:00 UTC = 09:00 WIB, Sabtu
+    - cron: "29 1 * * 1-5"   # 01:30 UTC = 08:30 WIB
+
+  # Manual trigger untuk test
   workflow_dispatch:
 
 jobs:
-  weekly_maintenance:
-    name: "🔧 Weekly Maintenance"
+  pre_market:
+    name: "🌅 Pre-Market Alert"
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
 
-    # env di level JOB — diwarisi semua steps
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -29,27 +35,11 @@ jobs:
           cache: "pip"
 
       - name: "📦 Install"
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          python -c "import yfinance, pandas, numpy, supabase; print('✅ OK')"
+        run: pip install --upgrade pip && pip install -r requirements.txt
 
       - name: "📁 Logs"
         run: mkdir -p logs
 
-      - name: "🧹 DB Cleanup"
-        run: python -m src.runner db_cleanup
-        continue-on-error: true
-
-      - name: "🌐 Refresh Universe"
-        run: python -m src.runner refresh_universe
-        continue-on-error: true
-
-      - name: "🔬 Run Backtests"
-        run: python -m src.runner run_backtests --limit 50
-        continue-on-error: true
-        timeout-minutes: 20
-
-      - name: "📊 Weekly Report"
-        run: python -m src.runner weekly_report
+      - name: "🌅 Kirim Pre-Market Alert"
+        run: python -m src.runner pre_market
         continue-on-error: true

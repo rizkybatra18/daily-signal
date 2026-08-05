@@ -358,7 +358,7 @@ def load_signals(sig_date=None):
         if not db: return []
         d = sig_date or date.today().isoformat()
         r = db.table("signals").select("*").eq("signal_date", d)\
-              .order("raw_score", desc=True).execute()
+              .order("composite_score", desc=True).execute()
         return r.data or []
     except: return []
 
@@ -374,7 +374,7 @@ def load_signals_range(days=30):
                 "trend_score,momentum_score,volume_score,strength_score,volatility_score,"
                 "raw_score,sector_bonus,confidence")
         r = db.table("signals").select(cols).gte("signal_date", since)\
-              .order("signal_date", desc=True).order("raw_score", desc=True).execute()
+              .order("signal_date", desc=True).order("composite_score", desc=True).execute()
         return r.data or []
     except: return []
 
@@ -675,7 +675,7 @@ def page_home():
         for s in top5:
             ticker = ss(s.get("ticker")).replace(".JK","")
             stype  = ss(s.get("signal_type"),"AVOID")
-            score  = sf(s.get("raw_score"))
+            score  = sf(s.get("composite_score"))
             close  = sf(s.get("close_price"))
             sector = ss(s.get("sector"),"—")
             conf   = s.get("confidence")
@@ -722,7 +722,7 @@ def page_top_signals():
     scan_date  = c1.date_input("Tanggal", value=date.today(), max_value=date.today())
     sig_filter = c2.multiselect("Tipe Sinyal", ["STRONG_BUY","BUY","WATCHLIST","AVOID"],
                                 default=["STRONG_BUY","BUY"])
-    min_score  = c3.slider("Skor Minimum (raw)", 0, 100, 45, help="Difilter dari raw_score -- skor yang benar-benar dipakai sistem buat klasifikasi sinyal")
+    min_score  = c3.slider("Skor Minimum", 0, 100, 45)
     search_tk  = c4.text_input("Cari Ticker", placeholder="BBCA")
 
     signals = load_signals(scan_date.isoformat())
@@ -732,7 +732,7 @@ def page_top_signals():
     rows = []
     for s in signals:
         stype  = ss(s.get("signal_type"), "AVOID")
-        score  = sf(s.get("raw_score"))
+        score  = sf(s.get("composite_score"))
         ticker = ss(s.get("ticker")).replace(".JK","")
         if stype not in sig_filter: continue
         if score < min_score: continue
@@ -837,8 +837,8 @@ def page_signal_detail():
         st.warning("Data tidak ditemukan."); return
 
     stype  = ss(sig.get("signal_type"),"AVOID")
-    raw    = sf(sig.get("raw_score"))
-    disp   = sig.get("composite_score")  # raw_score x regime_weight -- konteks tambahan
+    score  = sf(sig.get("composite_score"))
+    raw    = sig.get("raw_score")
     close  = sf(sig.get("close_price"))
     sector = ss(sig.get("sector"),"—")
     conf   = sig.get("confidence")
@@ -856,11 +856,8 @@ def page_signal_detail():
         f'<div class="ds-num" style="text-align:right">'
         f'<div style="font-size:.75rem;color:#9aa4b8;text-transform:uppercase">Harga</div>'
         f'<div style="font-weight:700;font-size:1.5rem;color:#e8ebf2">Rp{close:,.0f}</div>'
-        # AUDIT: raw_score dipajang sebagai angka utama -- itu yang benar2
-        # dipakai buat klasifikasi signal_type (lihat _determine_signal_type).
-        # composite_score cuma konteks (sudah dikali regime_weight).
-        f'<div style="font-size:.8rem;color:#9aa4b8">Score {raw:.0f}/100'
-        + (f' · display {sf(disp):.0f}' if disp is not None else '') + '</div>'
+        f'<div style="font-size:.8rem;color:#9aa4b8">Score {score:.0f}/100'
+        + (f' · raw {sf(raw):.0f}' if raw is not None else '') + '</div>'
         f'</div></div></div>',
         unsafe_allow_html=True
     )
@@ -871,8 +868,8 @@ def page_signal_detail():
         ("Trend",      sf(sig.get("trend_score")),      30),
         ("Momentum",   sf(sig.get("momentum_score")),   25),
         ("Volume",     sf(sig.get("volume_score")),     20),
-        ("Strength",   sf(sig.get("strength_score")),   21),
-        ("Volatility", sf(sig.get("volatility_score")),  4),
+        ("Strength",   sf(sig.get("strength_score")),   15),
+        ("Volatility", sf(sig.get("volatility_score")), 10),
     ]
     sector_bonus = sig.get("sector_bonus")
 
@@ -955,7 +952,7 @@ def page_historical_signals():
     tf        = c2.multiselect("Tipe", ["STRONG_BUY","BUY","WATCHLIST"],
                                default=["STRONG_BUY","BUY"])
     search    = c3.text_input("Cari Ticker", placeholder="BBCA")
-    min_s     = c4.slider("Skor Minimum (raw)", 0, 100, 45, key="hs", help="Difilter dari raw_score -- skor yang benar-benar dipakai sistem buat klasifikasi sinyal")
+    min_s     = c4.slider("Skor Minimum", 0, 100, 45, key="hs")
 
     signals = load_signals_range(days_back)
     if not signals:
@@ -963,7 +960,7 @@ def page_historical_signals():
 
     filtered = [s for s in signals
                 if ss(s.get("signal_type")) in tf
-                and sf(s.get("raw_score")) >= min_s
+                and sf(s.get("composite_score")) >= min_s
                 and (not search or search.upper() in ss(s.get("ticker")).upper())]
 
     st.markdown(f'<div class="ds-caption">{len(filtered)} dari {len(signals)} sinyal · {days_back} hari terakhir</div>', unsafe_allow_html=True)
@@ -976,7 +973,7 @@ def page_historical_signals():
             "Tanggal": ss(s.get("signal_date")),
             "Ticker":  ss(s.get("ticker")).replace(".JK",""),
             "Type":    ss(s.get("signal_type"),"AVOID").replace("_"," "),
-            "Score":   sf(s.get("raw_score")),
+            "Score":   sf(s.get("composite_score")),
             "Sektor":  ss(s.get("sector"),"—")[:18],
             "Close":   sf(s.get("close_price")),
             "Entry":   sf(s.get("entry_price")) or sf(s.get("close_price")),
@@ -1152,112 +1149,6 @@ def page_signal_performance():
                                        text=mo["net_return_pct"].apply(lambda x: f"{x:+.1f}%"), textposition="outside"))
                 fig.update_layout(title="Monthly Performance (%)", height=250, **LAYOUT)
                 st.plotly_chart(fig, use_container_width=True)
-
-    # ── Detail Per Saham (BARU) ───────────────────────────────────
-    section("DETAIL PER SAHAM", "🏷️")
-    if len(closed_df) == 0:
-        st.info("Belum ada sinyal CLOSED/EXPIRED untuk periode ini.")
-    else:
-        min_trades = st.slider(
-            "Minimal jumlah sinyal per saham (biar tidak kepancing n=1)",
-            1, max(1, int(closed_df.groupby("ticker").size().max())), 1, key="perf_min_trades"
-        )
-        per_ticker = (
-            closed_df.groupby("ticker")
-            .agg(
-                n=("net_return_pct", "count"),
-                win_rate=("net_return_pct", lambda x: (x > 0).mean()),
-                avg_return=("net_return_pct", "mean"),
-                total_return=("net_return_pct", "sum"),
-                best=("net_return_pct", "max"),
-                worst=("net_return_pct", "min"),
-                avg_holding=("holding_days", "mean"),
-            )
-            .reset_index()
-        )
-        # sektor (ambil modus per ticker, kalau kolomnya ada)
-        if "sector" in closed_df.columns:
-            sector_map = closed_df.groupby("ticker")["sector"].agg(
-                lambda s: s.mode().iat[0] if not s.mode().empty else "—"
-            )
-            per_ticker["sector"] = per_ticker["ticker"].map(sector_map)
-
-        per_ticker = per_ticker[per_ticker["n"] >= min_trades].sort_values("total_return", ascending=False)
-
-        c1, c2, c3 = st.columns(3)
-        with c1: st.markdown(tile("Saham Unik (lolos filter)", len(per_ticker)), unsafe_allow_html=True)
-        with c2:
-            best_ticker = per_ticker.iloc[0]["ticker"] if len(per_ticker) else "—"
-            st.markdown(tile("Kontributor Terbaik", best_ticker), unsafe_allow_html=True)
-        with c3:
-            worst_row = per_ticker.sort_values("total_return").iloc[0] if len(per_ticker) else None
-            st.markdown(tile("Kontributor Terburuk", worst_row["ticker"] if worst_row is not None else "—"), unsafe_allow_html=True)
-
-        show = per_ticker.copy()
-        show["win_rate"]    = show["win_rate"].apply(lambda x: f"{x:.0%}")
-        show["avg_return"]  = show["avg_return"].apply(lambda x: f"{x:+.2f}%")
-        show["total_return"] = show["total_return"].apply(lambda x: f"{x:+.2f}%")
-        show["best"]        = show["best"].apply(lambda x: f"{x:+.2f}%")
-        show["worst"]       = show["worst"].apply(lambda x: f"{x:+.2f}%")
-        show["avg_holding"] = show["avg_holding"].apply(lambda x: f"{x:.1f}d")
-        cols_order = ["ticker"] + (["sector"] if "sector" in show.columns else []) + \
-                     ["n", "win_rate", "avg_return", "total_return", "best", "worst", "avg_holding"]
-        st.dataframe(
-            show[cols_order].rename(columns={
-                "ticker": "Ticker", "sector": "Sektor", "n": "Jml Sinyal",
-                "win_rate": "Win Rate", "avg_return": "Avg Return",
-                "total_return": "Total Return", "best": "Terbaik", "worst": "Terburuk",
-                "avg_holding": "Avg Holding",
-            }),
-            use_container_width=True, hide_index=True, height=420
-        )
-        st.caption(
-            "Klik header kolom untuk sort. 'Total Return' = jumlah net_return_pct semua sinyal "
-            "saham itu (non-compounding) -- proxy kontribusi, bukan hasil investasi riil per saham."
-        )
-
-    # ── Score Calibration (BARU) ──────────────────────────────────
-    section("SCORE CALIBRATION", "🎯")
-    st.caption(
-        "Apakah skor yang dihasilkan sistem benar-benar memprediksi hasil? Breakdown win rate & "
-        "avg return per bucket -- dipakai buat validasi bobot scoring, bukan cuma lihat agregat."
-    )
-    if len(closed_df) < 10:
-        st.info("Butuh minimal ~10 sinyal CLOSED untuk kalibrasi yang bermakna.")
-    else:
-        calib_specs = [
-            ("raw_score",        [0, 45, 60, 75, 100],      ["<45", "45-59", "60-74", "75+"]),
-            ("volatility_score", [-1, 4, 7, 10],             ["0-4 (rendah)", "4-7 (sedang)", "7-10 (tinggi)"]),
-            ("minus_di",         [0, 10, 15, 20, 100],       ["<10", "10-14", "15-19", "20+"]),
-            ("adx",              [0, 20, 25, 30, 40, 100],   ["<20", "20-24", "25-29", "30-39", "40+"]),
-        ]
-        cc = st.columns(2)
-        for i, (feat, bins, labels) in enumerate(calib_specs):
-            if feat not in closed_df.columns:
-                continue
-            tmp = closed_df.copy()
-            tmp[feat] = tmp[feat].apply(sf)
-            tmp["bucket"] = pd.cut(tmp[feat], bins=bins, labels=labels)
-            g = tmp.groupby("bucket", observed=True).agg(
-                n=("net_return_pct", "count"),
-                win_rate=("net_return_pct", lambda x: (x > 0).mean()),
-                avg_return=("net_return_pct", "mean"),
-            ).reset_index()
-            g = g[g["n"] > 0]
-            with cc[i % 2]:
-                fig = go.Figure(go.Bar(
-                    x=g["bucket"].astype(str), y=g["avg_return"],
-                    marker_color=g["avg_return"].apply(lambda x: "#00c896" if x >= 0 else "#f87171"),
-                    text=g.apply(lambda r: f"{r['avg_return']:+.1f}%<br>n={r['n']}", axis=1),
-                    textposition="outside",
-                ))
-                fig.update_layout(title=f"Avg Return per bucket: {feat}", height=260, **LAYOUT)
-                st.plotly_chart(fig, use_container_width=True)
-        st.caption(
-            "Idealnya avg return naik monoton seiring bucket 'lebih bagus' (raw_score tinggi, "
-            "minus_di rendah, dst). Kalau flat/terbalik, faktor itu belum/tidak prediktif -- "
-            "lihat AUDIT note di src/signals/ta_engine.py::_score_strength/_score_volatility."
-        )
 
     # ── Backtest Summary (dipertahankan, sumber terpisah dari signal_results) ─
     if bt:
