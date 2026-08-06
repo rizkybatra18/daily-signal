@@ -1216,6 +1216,140 @@ def page_signal_performance():
             "saham itu (non-compounding) -- proxy kontribusi, bukan hasil investasi riil per saham."
         )
 
+    # ── Snapshot Sinyal Individual (BARU) ──────────────────────────
+    section("SNAPSHOT SINYAL", "🔎")
+    if len(closed_df) == 0:
+        st.info("Belum ada sinyal CLOSED/EXPIRED untuk periode ini.")
+    else:
+        opts_df = closed_df.sort_values("signal_date", ascending=False)
+        opt_labels = [
+            f"{r.ticker} · {r.signal_date} · {r.signal_type} · {sf(r.net_return_pct):+.1f}%"
+            for r in opts_df.itertuples()
+        ]
+        picked = st.selectbox("Pilih 1 sinyal buat lihat snapshot lengkapnya", opt_labels, key="snap_pick")
+        row = opts_df.iloc[opt_labels.index(picked)]
+        row = row.astype(object).where(pd.notna(row), None)  # NaN -> None (biar sf()/ss() konsisten)
+
+        def g(col):
+            return row[col] if col in row.index else None
+
+        # -- Identitas & hasil --
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: st.markdown(tile("Ticker", ss(g("ticker")).replace(".JK", "")), unsafe_allow_html=True)
+        with c2: st.markdown(tile("Signal Type", ss(g("signal_type"))), unsafe_allow_html=True)
+        with c3: st.markdown(tile("Net Return", f"{sf(g('net_return_pct')):+.2f}%"), unsafe_allow_html=True)
+        with c4: st.markdown(tile("Exit Reason", ss(g("exit_reason"), "-")), unsafe_allow_html=True)
+
+        st.markdown(
+            f"**{ss(g('ticker'))}** — {ss(g('sector'), '—')} · Regime {ss(g('market_regime'), '—')} · "
+            f"Timeframe {ss(g('timeframe'), '1D')} · Sinyal {ss(g('signal_date'))} → Exit {ss(g('exit_date'), '-')} "
+            f"({sf(g('holding_days')):.0f} hari)"
+        )
+
+        tab_a, tab_b, tab_c, tab_d, tab_e = st.tabs(
+            ["📐 Indikator", "🧭 Kondisi & Struktur", "🧩 Pattern", "🎯 Score Breakdown", "✔ Alasan & Trading Plan"]
+        )
+
+        with tab_a:
+            ic1, ic2, ic3, ic4 = st.columns(4)
+            with ic1:
+                st.markdown("**Momentum**")
+                st.write(f"RSI: {sf(g('rsi')):.1f} (prev {sf(g('rsi_prev')):.1f}, slope {sf(g('rsi_slope')):+.2f})")
+                st.write(f"MACD: {sf(g('macd_line')):.2f}")
+                st.write(f"MACD Signal: {sf(g('macd_signal')):.2f}")
+                st.write(f"MACD Hist: {sf(g('macd_hist')):+.2f}")
+            with ic2:
+                st.markdown("**Trend (EMA/SMA)**")
+                st.write(f"EMA20/50/200: {sf(g('ema20')):,.0f} / {sf(g('ema50')):,.0f} / {sf(g('ema200')):,.0f}")
+                st.write(f"SMA20/50/200: {sf(g('sma20')):,.0f} / {sf(g('sma50')):,.0f} / {sf(g('sma200')):,.0f}")
+                st.write(f"Dist EMA20/50/200: {sf(g('distance_ema20_pct')):+.1f}% / "
+                         f"{sf(g('distance_ema50_pct')):+.1f}% / {sf(g('distance_ema200_pct')):+.1f}%")
+            with ic3:
+                st.markdown("**Strength**")
+                st.write(f"ADX: {sf(g('adx')):.1f}")
+                st.write(f"DI+: {sf(g('plus_di')):.1f}")
+                st.write(f"DI-: {sf(g('minus_di')):.1f}")
+                st.write(f"ATR: {sf(g('atr')):.1f}")
+            with ic4:
+                st.markdown("**Volume & Volatility**")
+                st.write(f"Volume: {sf(g('volume')):,.0f}")
+                st.write(f"Avg Vol 20D: {sf(g('avg_volume_20')):,.0f}")
+                st.write(f"Relative Volume: {sf(g('relative_volume')):.2f}x")
+                st.write(f"Bollinger Position: {sf(g('bollinger_position')):.2f}")
+
+        with tab_b:
+            cc1, cc2, cc3 = st.columns(3)
+            with cc1: st.markdown(tile("Trend", ss(g("trend_condition"), "—")), unsafe_allow_html=True)
+            with cc2: st.markdown(tile("Momentum", ss(g("momentum_condition"), "—")), unsafe_allow_html=True)
+            with cc3: st.markdown(tile("Volume", ss(g("volume_condition"), "—")), unsafe_allow_html=True)
+            st.markdown("")
+            st.markdown(tile("Struktur Trend", ss(g("trend_structure"), "Tidak terdeteksi")), unsafe_allow_html=True)
+            st.caption(
+                "Struktur trend HEURISTIK dari swing pivot (lihat src/signals/pattern_engine.py) -- "
+                "belum divalidasi empiris, belum dipakai scoring."
+            )
+
+        with tab_c:
+            pats = g("pattern_detected")
+            if isinstance(pats, str):
+                import json as _json
+                try:
+                    pats = _json.loads(pats)
+                except Exception:
+                    pats = [pats]
+            elif not isinstance(pats, list):
+                pats = []  # None / NaN / tipe lain -> anggap kosong, jangan crash
+            if pats:
+                for p in pats:
+                    st.markdown(f"🧩 {p}")
+            else:
+                st.info("Tidak ada pattern candlestick/breakout/S-R/divergence yang terdeteksi di sinyal ini.")
+            st.caption("Deteksi HEURISTIK, bukan machine learning -- lihat docstring pattern_engine.py.")
+
+        with tab_d:
+            sc1, sc2, sc3, sc4, sc5 = st.columns(5)
+            with sc1: st.markdown(tile("Trend Score", f"{sf(g('trend_score')):.1f}/30"), unsafe_allow_html=True)
+            with sc2: st.markdown(tile("Momentum Score", f"{sf(g('momentum_score')):.1f}/25"), unsafe_allow_html=True)
+            with sc3: st.markdown(tile("Volume Score", f"{sf(g('volume_score')):.1f}/20"), unsafe_allow_html=True)
+            with sc4: st.markdown(tile("Strength Score", f"{sf(g('strength_score')):.1f}/21"), unsafe_allow_html=True)
+            with sc5: st.markdown(tile("Volatility Score", f"{sf(g('volatility_score')):.1f}/4"), unsafe_allow_html=True)
+            st.markdown("")
+            sc6, sc7, sc8, sc9, sc10 = st.columns(5)
+            with sc6: st.markdown(tile("Sector Bonus", f"{sf(g('sector_bonus')):+.1f}"), unsafe_allow_html=True)
+            with sc7: st.markdown(tile("Regime Weight", f"{sf(g('regime_weight')):.2f}x"), unsafe_allow_html=True)
+            with sc8: st.markdown(tile("Raw Score", f"{sf(g('raw_score')):.0f}/100"), unsafe_allow_html=True)
+            with sc9: st.markdown(tile("Final Score", f"{sf(g('final_score')):.0f}/100"), unsafe_allow_html=True)
+            with sc10: st.markdown(tile("Confidence", ss(g("confidence"), "—")), unsafe_allow_html=True)
+            st.caption(
+                "Raw Score = yang benar-benar dipakai klasifikasi signal_type. Final Score = "
+                "raw x regime_weight, nilai tampilan saja -- lihat CHANGELOG v2.2.0."
+            )
+
+        with tab_e:
+            reasons = g("reasons")
+            if isinstance(reasons, str):
+                import json as _json
+                try:
+                    reasons = _json.loads(reasons)
+                except Exception:
+                    reasons = [reasons]
+            elif not isinstance(reasons, list):
+                reasons = []  # None / NaN / tipe lain -> anggap kosong, jangan crash
+            st.markdown("**Alasan sinyal muncul:**")
+            if reasons:
+                for r in reasons:
+                    st.markdown(f"✔ {r}")
+            else:
+                st.caption("Tidak ada catatan alasan untuk sinyal ini.")
+            st.markdown("")
+            st.markdown("**Trading Plan saat sinyal dibuat:**")
+            tp1, tp2, tp3, tp4 = st.columns(4)
+            with tp1: st.markdown(tile("Entry", f"{sf(g('entry_price')):,.0f}"), unsafe_allow_html=True)
+            with tp2: st.markdown(tile("Stop Loss", f"{sf(g('stop_loss')):,.0f}"), unsafe_allow_html=True)
+            with tp3: st.markdown(tile("Target 1", f"{sf(g('target_1')):,.0f}"), unsafe_allow_html=True)
+            with tp4: st.markdown(tile("Target 2", f"{sf(g('target_2')):,.0f}"), unsafe_allow_html=True)
+            st.caption(f"Risk/Reward: {sf(g('risk_reward')):.2f} · Exit @ {sf(g('exit_price')):,.0f} ({ss(g('exit_reason'),'-')})")
+
     # ── Score Calibration (BARU) ──────────────────────────────────
     section("SCORE CALIBRATION", "🎯")
     st.caption(

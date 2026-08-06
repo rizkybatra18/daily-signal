@@ -2,6 +2,63 @@
 
 ---
 
+## v2.3.0 — Snapshot Sinyal Lengkap + Trend Structure & Pattern Detection (2026-08)
+
+### 🔍 Audit dulu, baru kerja: sebagian besar sudah ada
+Sebelum menulis kode, saya audit `signal_evaluator.py` dulu terhadap permintaan
+"simpan snapshot lengkap per sinyal". Ternyata **sebagian besar SUDAH tersimpan**
+sejak sebelumnya: identitas (ticker/signal_date/timeframe/sector/market_regime/
+signal_type), semua nilai indikator mentah (RSI+slope, MACD line/signal/hist,
+EMA20/50/200, SMA20/50/200, ATR, ADX, DI+/-, volume+relative volume, Bollinger
+position, distance EMA), kondisi (trend/momentum/volume condition), SELURUH
+komponen scoring (trend/momentum/volume/strength/volatility score, sector_bonus,
+regime_weight, raw_score, final_score, confidence), dan `reasons` (alasan sinyal).
+Yang GENUINELY kosong cuma 2 kolom: `trend_structure` dan `pattern_detected`
+(ada di schema, RESERVED, tidak pernah diisi — tidak ada engine-nya).
+
+### 🆕 `src/signals/pattern_engine.py` (modul baru, berdiri sendiri)
+- `detect_trend_structure()` — swing pivot terkonfirmasi (window kiri-kanan, no
+  lookahead) → klasifikasi Higher High / Higher Low / Lower High / Lower Low /
+  Breakout / Pullback / Consolidation.
+- `detect_candlestick_patterns()` — Bullish Engulfing, Hammer, Doji, Morning Star.
+- `detect_breakout_pattern()` — breakout resistance 20-bar, dengan/tanpa konfirmasi volume.
+- `detect_support_resistance()` — dekat swing high/low terkonfirmasi (proximity 2%).
+- `detect_divergence()` — RSI bullish/bearish divergence vs swing pivot harga.
+- `detect_all_patterns()` — gabungan semuanya, tiap sub-deteksi dibungkus try/except
+  (satu gagal tidak menggagalkan yang lain).
+- **19 unit test baru** (`tests/unit/test_pattern_engine.py`), termasuk edge case
+  data pendek/None.
+- ⚠️ **HEURISTIK berbasis aturan, BUKAN divalidasi empiris** (beda dgn
+  volatility_score/minus_di di v2.2.0 yang sudah teruji ke data live). Belum
+  di-wire ke scoring manapun — sengaja, sampai ada validasi seperti yang lain.
+
+### 🔌 Wiring (`src/signals/signal_evaluator.py`)
+- `capture_todays_signals()` sekarang panggil `detect_trend_structure()` &
+  `detect_all_patterns()`, isi kolom `trend_structure`/`pattern_detected`.
+- `reasons` diperluas 2 tag baru: "ATR Sehat" (atr_pct 1-4%) & "Market Regime Bull",
+  plus pattern yang terdeteksi ikut masuk `reasons` (mis. "Breakout Resistance").
+
+### 🗄️ `migrations/003_signal_results.sql` (BARU)
+Ketemu gap infra: tabel `signal_results` direferensikan di kode ("migration 003")
+tapi FILE MIGRATION-NYA TIDAK ADA di repo — sepertinya dibuat manual di Supabase.
+Migration ini mendokumentasikan skema lengkap yang sudah berjalan (idempotent,
+`CREATE TABLE IF NOT EXISTS`) + resmi menambah `trend_structure`/`pattern_detected`.
+**WAJIB dijalankan di Supabase SQL editor sebelum deploy**, kalau tidak field baru
+akan silently didrop oleh `_upsert_with_schema_fallback()`.
+
+### 🖥️ Dashboard — Signal Performance
+**BARU: tab "SNAPSHOT SINYAL"** — drill-down per SATU sinyal spesifik (bukan
+agregat), pilih dari dropdown, tampilkan semua data di atas dalam 5 tab:
+Indikator, Kondisi & Struktur, Pattern, Score Breakdown (semua komponen, bukan
+cuma Final Score), Alasan & Trading Plan.
+
+Sempat ketemu & perbaiki bug NaN-truthy sebelum rilis: kalau `pattern_detected`/
+`reasons` kosong, pandas mengembalikan `NaN` (float) — `if nan_value:` di Python
+itu **True** (NaN truthy), jadi `for p in pats:` bisa crash. Diperbaiki dengan
+normalisasi NaN→None sekali di awal (`row.astype(object).where(pd.notna(row), None)`)
+sebelum dipakai fungsi manapun.
+
+
 ## v2.2.0 — Kalibrasi Scoring dari Data Live + Konsistensi raw_score (2026-08)
 
 Basis: analisis empiris 63 sinyal `signal_results` CLOSED (27-31 Jul 2026),

@@ -47,11 +47,14 @@ lihat src/backtest/engine.py yang sudah memakai konvensi yang sama):
 ═══════════════════════════════════════════════════════════════════
 KETERBATASAN YANG DIAKUI JUJUR:
 ═══════════════════════════════════════════════════════════════════
-  - trend_structure & pattern_detected: RESERVED, selalu NULL.
-    Tidak ada engine deteksi pattern/struktur trend (HH/HL/LH/LL,
-    candlestick, harmonic, dst) di sistem ini saat ini. Kolom
-    disiapkan di schema untuk pekerjaan masa depan, tidak dikarang
-    di sini.
+  - trend_structure & pattern_detected: sejak v2.3 diisi oleh
+    src/signals/pattern_engine.py (swing pivot HH/HL/LH/LL, breakout,
+    consolidation, candlestick, S/R, RSI divergence). HEURISTIK
+    berbasis aturan sederhana, BELUM divalidasi empiris seperti
+    volatility_score/minus_di (lihat CHANGELOG v2.2.0) dan BELUM
+    di-wire ke scoring manapun -- perlakukan sebagai konteks tambahan
+    utk dibaca manusia, bukan sinyal yang sudah terbukti prediktif.
+    Kalau deteksi gagal/data kurang, tetap NULL (bukan dikarang).
 """
 
 from datetime import date, timedelta
@@ -70,6 +73,7 @@ from src.core.database import (
 )
 from src.providers.market_data import get_ohlcv_from_db
 from src.signals.ta_engine import calc_rsi, calc_adx, calc_bollinger
+from src.signals.pattern_engine import detect_trend_structure, detect_all_patterns
 
 log = get_logger("signal_evaluator")
 
@@ -262,7 +266,37 @@ def capture_todays_signals(signal_date: Optional[str] = None) -> dict:
             reasons = []
             fc = sig.get("factor_contribution")
             if isinstance(fc, dict) and fc.get("highlights"):
-                reasons = fc["highlights"]
+                reasons = list(fc["highlights"])
+
+            # trend_structure & pattern_detected (BARU) -- lihat pattern_engine.py.
+            # rsi_series dibutuhkan buat divergence, dihitung ulang di sini
+            # (bukan reuse dari `sig` yang cuma simpan nilai RSI terakhir).
+            trend_structure = None
+            pattern_detected: list[str] = []
+            if ohlcv is not None and not ohlcv.empty:
+                try:
+                    trend_structure = detect_trend_structure(ohlcv)
+                except Exception as e:
+                    log.debug(f"{ticker}: detect_trend_structure gagal: {e}")
+                try:
+                    rsi_series = calc_rsi(ohlcv["close"], settings.rsi_period)
+                    pattern_detected = detect_all_patterns(
+                        ohlcv, rsi_series=rsi_series, volume_ratio=sig.get("volume_ratio")
+                    )
+                except Exception as e:
+                    log.debug(f"{ticker}: detect_all_patterns gagal: {e}")
+
+            # tambahan reason tag sederhana (AUDIT: sesuai permintaan, "ATR sehat"
+            # & "Market Regime Bull" -- keduanya derivasi angka yg sudah ada,
+            # bukan klaim baru) + pattern yg terdeteksi ikut ditampilkan sbg reason
+            # biar konsisten dgn contoh yg diminta ("Breakout Resistance" dst).
+            atr_pct_now = (float(sig.get("atr")) / float(sig.get("close_price")) * 100
+                           if sig.get("atr") and sig.get("close_price") else None)
+            if atr_pct_now is not None and 1.0 <= atr_pct_now <= 4.0:
+                reasons.append("ATR Sehat")
+            if sig.get("market_regime") == "BULL":
+                reasons.append("Market Regime Bull")
+            reasons.extend(pattern_detected)
 
             # regime_weight tidak disimpan langsung di tabel signals,
             # tapi composite_score = raw_score * regime_weight (lihat
@@ -311,8 +345,8 @@ def capture_todays_signals(signal_date: Optional[str] = None) -> dict:
                 "momentum_condition": conditions["momentum_condition"],
                 "volume_condition": conditions["volume_condition"],
 
-                # trend_structure & pattern_detected sengaja TIDAK diisi
-                # (RESERVED, lihat docstring modul ini)
+                "trend_structure": trend_structure,
+                "pattern_detected": pattern_detected or None,
 
                 "trend_score": sig.get("trend_score"),
                 "momentum_score": sig.get("momentum_score"),
