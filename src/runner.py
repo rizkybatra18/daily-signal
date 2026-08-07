@@ -259,6 +259,20 @@ def cmd_evaluate_signals(args):
     log.info(f"✓ Selesai: {result}")
 
 
+def cmd_backfill_patterns(args):
+    """
+    Isi trend_structure/pattern_detected untuk signal_results LAMA yang
+    dibuat sebelum pattern_engine.py ada (v2.3). Aman dijalankan
+    berkali-kali (idempotent) -- baris yang sudah keisi otomatis
+    dilewati di run berikutnya. Jalankan SEKALI setelah deploy v2.3 +
+    migration 003, baru signal baru akan keisi otomatis dgn sendirinya.
+    """
+    from src.signals.signal_evaluator import backfill_trend_and_patterns
+    log.info("▶ Backfill trend_structure/pattern_detected untuk sinyal lama...")
+    result = backfill_trend_and_patterns()
+    log.info(f"✓ Selesai: {result}")
+
+
 def cmd_weekly_report(args):
     from src.telegram.bot import send_daily_summary
     log.info("▶ Weekly report...")
@@ -277,7 +291,7 @@ def main():
         "test_telegram",
         "refresh_universe", "run_backtests", "db_cleanup",
         "update_portfolio", "portfolio_snapshot", "weekly_report",
-        "evaluate_signals",
+        "evaluate_signals", "backfill_patterns",
     ])
     parser.add_argument("--limit", type=int, default=50)
 
@@ -295,6 +309,7 @@ def main():
         "portfolio_snapshot":cmd_portfolio_snapshot,
         "weekly_report":     cmd_weekly_report,
         "evaluate_signals":  cmd_evaluate_signals,
+        "backfill_patterns": cmd_backfill_patterns,
     }
 
     try:

@@ -70,6 +70,7 @@ from src.core.database import (
     upsert_signal_result,
     get_open_signal_results,
     signal_result_exists,
+    get_signal_results_missing_patterns,
 )
 from src.providers.market_data import get_ohlcv_from_db
 from src.signals.ta_engine import calc_rsi, calc_adx, calc_bollinger
@@ -382,6 +383,83 @@ def capture_todays_signals(signal_date: Optional[str] = None) -> dict:
 
     log.info(f"  ✓ {captured} snapshot baru, {skipped} dilewati (sudah ada), {errors} error")
     return {"captured": captured, "skipped": skipped, "errors": errors}
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  BAGIAN 2.5 — BACKFILL trend_structure/pattern_detected (v2.3, sekali jalan)
+# ═══════════════════════════════════════════════════════════════════
+
+def backfill_trend_and_patterns(min_history_days: int = 90) -> dict:
+    """
+    Isi `trend_structure`/`pattern_detected` untuk baris signal_results LAMA
+    yang dibuat SEBELUM pattern_engine.py ada (v2.3) -- kolom itu cuma
+    keisi otomatis buat sinyal BARU sejak deploy, TIDAK retroaktif ke
+    yang sudah ada (lihat CHANGELOG v2.3.0).
+
+    Cara jalan: ambil semua baris trend_structure IS NULL, kelompokkan
+    per ticker (irit query OHLCV), lalu utk tiap baris SLICE data harga
+    sampai signal_date-nya SAJA (bukan sampai hari ini) -- supaya hasil
+    deteksi persis seperti kalau pattern_engine ini sudah ada sejak awal,
+    tanpa lookahead bias.
+
+    SENGAJA tidak menyentuh kolom `reasons` (biar tidak mengubah histori
+    "alasan sinyal muncul" yang sudah tercatat) -- cuma isi 2 kolom yang
+    tadinya kosong. Aman dijalankan berkali-kali (idempotent: baris yang
+    sudah keisi otomatis tidak kepanggil lagi run berikutnya).
+    """
+    rows = get_signal_results_missing_patterns()
+    if not rows:
+        log.info("Backfill trend_structure/pattern_detected: tidak ada baris yang perlu diisi.")
+        return {"updated": 0, "skipped_no_data": 0, "errors": 0}
+
+    by_ticker: dict[str, list[dict]] = {}
+    for r in rows:
+        by_ticker.setdefault(r["ticker"], []).append(r)
+
+    log.info(f"Backfill: {len(rows)} baris lama ({len(by_ticker)} ticker) perlu trend_structure/pattern_detected.")
+
+    updated = skipped_no_data = errors = 0
+    for ticker, ticker_rows in by_ticker.items():
+        try:
+            ohlcv = get_ohlcv_from_db(ticker, days=730)  # jendela lebar, cover sinyal lama
+        except Exception as e:
+            log.warning(f"{ticker}: gagal ambil OHLCV buat backfill: {e}")
+            errors += len(ticker_rows)
+            continue
+
+        if ohlcv is None or ohlcv.empty:
+            skipped_no_data += len(ticker_rows)
+            continue
+
+        for r in ticker_rows:
+            try:
+                sig_date = pd.Timestamp(r["signal_date"])
+                snapshot = ohlcv[ohlcv.index <= sig_date]
+                if len(snapshot) < min_history_days:
+                    skipped_no_data += 1
+                    continue
+
+                trend_structure = detect_trend_structure(snapshot)
+                rsi_series = calc_rsi(snapshot["close"], settings.rsi_period)
+                pattern_detected = detect_all_patterns(snapshot, rsi_series=rsi_series)
+
+                update_row = {
+                    "ticker": r["ticker"],
+                    "signal_date": r["signal_date"],
+                    "signal_type": r["signal_type"],
+                    "trend_structure": trend_structure,
+                    "pattern_detected": pattern_detected or None,
+                }
+                if upsert_signal_result(update_row):
+                    updated += 1
+                else:
+                    errors += 1
+            except Exception as e:
+                log.warning(f"{ticker} {r.get('signal_date')}: backfill gagal: {e}")
+                errors += 1
+
+    log.info(f"✓ Backfill selesai: {updated} diupdate, {skipped_no_data} dilewati (data harga kurang), {errors} error")
+    return {"updated": updated, "skipped_no_data": skipped_no_data, "errors": errors}
 
 
 # ═══════════════════════════════════════════════════════════════════

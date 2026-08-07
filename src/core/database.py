@@ -459,6 +459,32 @@ def get_open_signal_results(ticker: Optional[str] = None) -> list[dict]:
         return []
 
 
+def get_signal_results_missing_patterns(limit: int = 5000) -> list[dict]:
+    """
+    Ambil signal_results yang trend_structure-nya masih NULL -- dipakai
+    src/signals/signal_evaluator.py::backfill_trend_and_patterns() buat
+    isi data lama yang dibuat sebelum pattern_engine.py ada (v2.3).
+    Idempotent secara alami: baris yang sudah keisi otomatis tidak
+    kepanggil lagi di run berikutnya.
+    """
+    try:
+        db = get_db()
+        result = (
+            db.table("signal_results")
+            .select("ticker,signal_date,signal_type,atr,close_price,market_regime")
+            .is_("trend_structure", "null")
+            .order("signal_date")
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        from src.core.logger import get_logger
+        log = get_logger("database")
+        log.error(f"Gagal ambil signal_results missing patterns: {e}")
+        return []
+
+
 def get_signal_results_range(days: int = 90, status: Optional[str] = None) -> list[dict]:
     """Ambil signal_results dalam rentang N hari terakhir (untuk Signal Performance)."""
     try:

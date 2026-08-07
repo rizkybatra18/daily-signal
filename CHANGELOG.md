@@ -46,6 +46,34 @@ Migration ini mendokumentasikan skema lengkap yang sudah berjalan (idempotent,
 **WAJIB dijalankan di Supabase SQL editor sebelum deploy**, kalau tidak field baru
 akan silently didrop oleh `_upsert_with_schema_fallback()`.
 
+### ⏮️ Backfill data lama (jawaban atas "apa sinyal lama ikut keisi?")
+**Tidak, otomatis** — `capture_todays_signals()` cuma jalan sekali per sinyal
+saat PERTAMA dibuat, tidak pernah re-run ke baris lama; `evaluate_open_signals()`
+(yang menutup sinyal OPEN→CLOSED) juga cuma update kolom exit-related, tidak
+menyentuh trend_structure/pattern_detected. Jadi sinyal lama (baik yang sudah
+CLOSED maupun yang masih OPEN dan baru ditutup nanti) akan **tetap NULL** di
+2 kolom itu kecuali di-backfill manual.
+
+**BARU: `backfill_trend_and_patterns()`** (`src/signals/signal_evaluator.py`) +
+command `python -m src.runner backfill_patterns`:
+- Ambil semua baris `trend_structure IS NULL`, kelompok per ticker (irit query).
+- Untuk tiap baris, SLICE data harga sampai `signal_date`-nya saja (bukan sampai
+  hari ini) — hasil deteksi persis seolah pattern_engine sudah ada sejak awal,
+  tanpa lookahead bias.
+- Skip baris yang riwayat harga sebelum `signal_date`-nya kurang dari 90 hari
+  (data tidak cukup buat swing pivot yang bermakna) — dicatat sbg `skipped_no_data`,
+  bukan dipaksa isi dengan hasil tidak reliable.
+- **Sengaja TIDAK menyentuh `reasons`** — cuma isi 2 kolom yang tadinya kosong,
+  histori "alasan sinyal muncul" yang sudah tercatat dibiarkan apa adanya.
+- Idempotent — aman dijalankan berkali-kali, baris yang sudah keisi otomatis
+  terlewat di run berikutnya (tidak reset ke NULL, tidak dobel proses).
+- Diuji dgn mock DB (grouping per ticker, skip data kurang, skip ticker tanpa
+  data, konfirmasi `reasons` tidak ikut terkirim) sebelum dianggap aman jalan.
+
+**Cara pakai**: jalankan migration 003 dulu, deploy kode ini, lalu jalankan
+`python -m src.runner backfill_patterns` SEKALI buat isi data lama. Sinyal baru
+setelah itu otomatis terisi lewat `capture_todays_signals()`, tidak perlu backfill lagi.
+
 ### 🖥️ Dashboard — Signal Performance
 **BARU: tab "SNAPSHOT SINYAL"** — drill-down per SATU sinyal spesifik (bukan
 agregat), pilih dari dropdown, tampilkan semua data di atas dalam 5 tab:
