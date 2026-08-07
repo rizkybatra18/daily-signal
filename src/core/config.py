@@ -134,7 +134,7 @@ class Settings(BaseSettings):
     # Berapa hari bursa maksimum sebuah sinyal dipantau sebelum
     # dianggap EXPIRED jika TP/SL belum tersentuh — lihat
     # src/signals/signal_evaluator.py.
-    signal_max_holding_days: int = 20
+    signal_max_holding_days: int = 10
 
     # ── Data History ──────────────────────────────────────────────
     history_days_warmup: int = 252    # ~1 tahun untuk warm up indikator
