@@ -41,6 +41,15 @@ jobs:
         run: python -m src.runner db_cleanup
         continue-on-error: true
 
+      - name: "🔎 Backfill Trend/Pattern (sinyal lama)"
+        # Idempotent -- cuma proses baris yang trend_structure-nya masih
+        # NULL, jadi aman jalan tiap minggu sbg jaring pengaman kalau ada
+        # sinyal yg entah kenapa lewat capture tanpa ke-set (mis. deploy
+        # di tengah hari scan). Lihat CHANGELOG v2.3.0/v2.3.1.
+        run: python -m src.runner backfill_patterns
+        continue-on-error: true
+        timeout-minutes: 15
+
       - name: "🌐 Refresh Universe"
         run: python -m src.runner refresh_universe
         continue-on-error: true
