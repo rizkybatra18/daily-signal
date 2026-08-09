@@ -12,14 +12,22 @@ from unittest.mock import patch, MagicMock
 
 
 def make_ohlcv(n=100, trend="up", base_price=1000.0) -> pd.DataFrame:
-    """Buat DataFrame OHLCV sintetis."""
+    """Buat DataFrame OHLCV sintetis.
+    AUDIT: end anchor dimundurkan ke business day terdekat kalau
+    date.today() jatuh di Sabtu/Minggu -- pd.date_range(end=X, periods=n,
+    freq='B') kembaliin n-1 tanggal kalau end bukan business day (ketemu
+    tanpa sengaja pas run test hari Minggu, tidak ada hubungannya sama
+    perubahan lain di sesi ini)."""
     np.random.seed(42)
     closes = [base_price]
     for _ in range(n - 1):
         change = np.random.normal(0.003 if trend == "up" else -0.003, 0.02)
         closes.append(closes[-1] * (1 + change))
     closes = np.array(closes)
-    dates = pd.date_range(end=date.today(), periods=n, freq="B")
+    end = pd.Timestamp(date.today())
+    if end.weekday() >= 5:  # Sabtu=5, Minggu=6
+        end -= pd.tseries.offsets.BDay(1)
+    dates = pd.date_range(end=end, periods=n, freq="B")
     return pd.DataFrame({
         "open": closes * 0.999,
         "high": closes * 1.015,

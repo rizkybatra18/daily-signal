@@ -485,6 +485,92 @@ def get_signal_results_missing_patterns(limit: int = 5000) -> list[dict]:
         return []
 
 
+def get_weekly_scanner_stats(days: int = 7) -> dict:
+    """
+    Statistik scan mingguan dari tabel `signals` (BUKAN signal_results) --
+    dipakai runner.py::gather_weekly_stats() buat isi WEEKLY REPORT.
+    Return: {"total_runs": int (hari unik ada scan), "strong_buy": int,
+             "buy": int, "watchlist": int}
+    """
+    try:
+        from datetime import date, timedelta
+        db = get_db()
+        since = (date.today() - timedelta(days=days)).isoformat()
+        result = (
+            db.table("signals")
+            .select("signal_date,signal_type")
+            .gte("signal_date", since)
+            .execute()
+        )
+        rows = result.data or []
+        if not rows:
+            return {}
+        return {
+            "total_runs": len({r["signal_date"] for r in rows}),
+            "strong_buy": sum(1 for r in rows if r["signal_type"] == "STRONG_BUY"),
+            "buy": sum(1 for r in rows if r["signal_type"] == "BUY"),
+            "watchlist": sum(1 for r in rows if r["signal_type"] == "WATCHLIST"),
+        }
+    except Exception as e:
+        from src.core.logger import get_logger
+        log = get_logger("database")
+        log.error(f"Gagal ambil weekly scanner stats: {e}")
+        return {}
+
+
+def get_top_signals_range(days: int = 7, limit: int = 5) -> list[dict]:
+    """Top N sinyal (by raw_score) dalam N hari terakhir dari tabel `signals`."""
+    try:
+        from datetime import date, timedelta
+        db = get_db()
+        since = (date.today() - timedelta(days=days)).isoformat()
+        result = (
+            db.table("signals")
+            .select("ticker,signal_type,raw_score")
+            .gte("signal_date", since)
+            .in_("signal_type", ["STRONG_BUY", "BUY"])
+            .order("raw_score", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        from src.core.logger import get_logger
+        log = get_logger("database")
+        log.error(f"Gagal ambil top signals range: {e}")
+        return []
+
+
+def get_universe_weekly_diff(days: int = 7) -> dict:
+    """
+    Total saham aktif + berapa yang ditambah/didelisting dlm N hari terakhir,
+    dihitung dari timestamp `created_at`/`delisted_date` di tabel `stocks`
+    (bukan dari return value refresh_universe() -- itu tidak persisten
+    lintas proses CLI yang terpisah, lihat CHANGELOG v2.3.1).
+    """
+    try:
+        from datetime import date, timedelta
+        db = get_db()
+        since = (date.today() - timedelta(days=days)).isoformat()
+
+        total = db.table("stocks").select("ticker", count="exact").eq("is_active", True).limit(1).execute()
+        added = db.table("stocks").select("ticker", count="exact").gte("created_at", since).limit(1).execute()
+        removed = (
+            db.table("stocks").select("ticker", count="exact")
+            .eq("is_delisted", True).gte("delisted_date", since).limit(1).execute()
+        )
+        return {
+            "total": total.count if total.count is not None else "N/A",
+            "added": added.count if added.count is not None else "N/A",
+            "removed": removed.count if removed.count is not None else "N/A",
+        }
+    except Exception as e:
+        from src.core.logger import get_logger
+        log = get_logger("database")
+        log.error(f"Gagal ambil universe weekly diff: {e}")
+        return {}
+
+
 def get_signal_results_range(days: int = 90, status: Optional[str] = None) -> list[dict]:
     """Ambil signal_results dalam rentang N hari terakhir (untuk Signal Performance)."""
     try:

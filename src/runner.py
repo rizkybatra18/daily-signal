@@ -273,12 +273,132 @@ def cmd_backfill_patterns(args):
     log.info(f"✓ Selesai: {result}")
 
 
+def gather_weekly_stats() -> dict:
+    """
+    Kumpulkan semua data buat WEEKLY REPORT dari database -- dipanggil
+    cmd_weekly_report(). Tiap section dibungkus try/except sendiri-sendiri
+    supaya 1 sumber data gagal tidak menggagalkan seluruh laporan
+    (send_weekly_report() sendiri sudah aman terima field kosong via .get()).
+    """
+    from datetime import date, timedelta
+    from src.core.database import (
+        health_check,
+        get_universe_weekly_diff,
+        get_weekly_scanner_stats,
+        get_top_signals_range,
+    )
+    from src.backtest.engine import get_backtest_results
+    from src.signals.regime_engine import get_latest_regime
+    from src.signals.sector_engine import get_latest_sector_rankings
+
+    stats: dict = {}
+
+    try:
+        stats["universe"] = get_universe_weekly_diff(days=7)
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: universe gagal: {e}")
+        stats["universe"] = {}
+
+    hc = {}
+    try:
+        hc = health_check()
+        stats["database"] = {
+            "healthy": hc.get("status") == "healthy",
+            "status": hc.get("status", "unknown"),
+        }
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: database health gagal: {e}")
+        stats["database"] = {}
+
+    try:
+        cutoff = (date.today() - timedelta(days=7)).isoformat()
+        bt_recent = [r for r in get_backtest_results(limit=300) if (r.get("run_date") or "") >= cutoff]
+        if bt_recent:
+            win_rates = [r.get("win_rate") or 0 for r in bt_recent]
+            pfs = [r.get("profit_factor") or 0 for r in bt_recent]
+            sharpes = [r.get("sharpe_ratio") or 0 for r in bt_recent]
+            best = max(bt_recent, key=lambda r: r.get("win_rate") or 0)
+            stats["backtest"] = {
+                "count": len(bt_recent),
+                "avg_win_rate": sum(win_rates) / len(win_rates),
+                "avg_profit_factor": sum(pfs) / len(pfs),
+                "avg_sharpe": sum(sharpes) / len(sharpes),
+                "best_ticker": best.get("ticker"),
+                "best_win_rate": best.get("win_rate") or 0,
+            }
+        else:
+            stats["backtest"] = {}
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: backtest gagal: {e}")
+        stats["backtest"] = {}
+
+    try:
+        stats["scanner"] = get_weekly_scanner_stats(days=7)
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: scanner stats gagal: {e}")
+        stats["scanner"] = {}
+
+    try:
+        from src.telegram.bot import check_telegram_health
+        tg_health = check_telegram_health()
+        stats["health"] = {
+            "database": hc.get("status") == "healthy",
+            "telegram": tg_health.get("status") == "healthy",
+            "github": True,  # kalau kode ini jalan, berarti dieksekusi oleh GitHub Actions
+            "supabase": hc.get("status") == "healthy",
+        }
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: system health gagal: {e}")
+        stats["health"] = {}
+
+    try:
+        regime = get_latest_regime()
+        if regime:
+            total = (regime.advance_count or 0) + (regime.decline_count or 0)
+            breadth_pct = (regime.advance_count / total * 100) if total else 0
+            stats["market"] = {
+                "regime": regime.regime,
+                "breadth": f"{breadth_pct:.0f}% naik",
+                "strength": f"{regime.ihsg_adx:.1f}",
+            }
+        else:
+            stats["market"] = {}
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: market summary gagal: {e}")
+        stats["market"] = {}
+
+    try:
+        stats["top_sectors"] = (get_latest_sector_rankings() or [])[:5]
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: top sectors gagal: {e}")
+        stats["top_sectors"] = []
+
+    try:
+        stats["top_signals"] = get_top_signals_range(days=7, limit=5)
+    except Exception as e:
+        log.warning(f"gather_weekly_stats: top signals gagal: {e}")
+        stats["top_signals"] = []
+
+    return stats
+
+
 def cmd_weekly_report(args):
-    from src.telegram.bot import send_daily_summary
-    log.info("▶ Weekly report...")
-    send_daily_summary({"stocks_scanned":"N/A","strong_buy":"N/A",
-                        "buy":"N/A","watchlist":"N/A","regime":"N/A","duration_seconds":0})
-    log.info("✓ Report dikirim")
+    """
+    Kumpulkan statistik seminggu terakhir dari database, kirim WEEKLY
+    REPORT ke Telegram.
+
+    AUDIT: versi sebelumnya adalah STUB -- manggil send_daily_summary()
+    (format RINGKASAN HARIAN) dengan data palsu semua "N/A", BUKAN
+    send_weekly_report() yang sudah ada dan benar formatnya. gather_weekly_stats()
+    di atas yang sebelumnya cuma disebut di docstring send_weekly_report()
+    tapi tidak pernah benar-benar ditulis. Diperbaiki di v2.3.1.
+    """
+    from src.telegram.bot import send_weekly_report
+    log.info("▶ Mengumpulkan statistik mingguan...")
+    stats = gather_weekly_stats()
+    log.info(f"▶ Mengirim weekly report... (keys: {list(stats.keys())})")
+    ok = send_weekly_report(stats)
+    log.info(f"✓ Weekly report {'terkirim' if ok else 'GAGAL terkirim'}")
 
 
 def main():

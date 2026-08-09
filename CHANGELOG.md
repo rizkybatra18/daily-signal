@@ -2,6 +2,52 @@
 
 ---
 
+## v2.3.1 — Weekly Report Beneran Kirim Weekly Report (2026-08)
+
+### 🐛 Bug ditemukan dari laporan user: pesan Telegram salah total
+User lapor pesan mingguan yang diterima format-nya "RINGKASAN HARIAN" isinya
+semua "N/A" (lihat screenshot), bukan format WEEKLY REPORT yang seharusnya.
+Ditelusuri: `cmd_weekly_report()` di `runner.py` ternyata **STUB** — manggil
+`send_daily_summary()` (fungsi buat notifikasi HARIAN) dengan data hardcode
+`"N/A"` semua, BUKAN `send_weekly_report()` yang sudah ada & benar formatnya.
+`send_weekly_report()` sendiri sudah lama nunggu `stats` dict dari
+`gather_weekly_stats()` yang **disebut di docstring tapi tidak pernah ditulis**.
+
+### ✅ Fix: `gather_weekly_stats()` (BARU, `src/runner.py`)
+Kumpulkan data asli dari database, tiap section dibungkus try/except sendiri
+(1 sumber gagal tidak menggagalkan section lain):
+- **Universe**: total saham aktif + added/removed 7 hari terakhir, dihitung
+  dari `created_at`/`delisted_date` di tabel `stocks` (BUKAN dari return
+  value `refresh_universe()` — itu tidak persisten lintas proses CLI yang
+  terpisah, karena tiap `python -m src.runner X` adalah proses baru).
+- **Database**: dari `health_check()` yang sudah ada.
+- **Backtest**: agregat `get_backtest_results()` yang di-filter ke `run_date`
+  7 hari terakhir (avg win rate/profit factor/sharpe, strategi terbaik).
+- **Scanner**: `get_weekly_scanner_stats()` (BARU) — hitung STRONG_BUY/BUY/
+  WATCHLIST dari tabel `signals` 7 hari terakhir.
+- **System Health**: database + `check_telegram_health()` (ping API beneran,
+  bukan cuma cek token ada) + GitHub (implisit True kalau kode ini jalan) + Supabase.
+- **Market**: `get_latest_regime()` — breadth dari advance/decline count.
+- **Top 5 Sektor**: `get_latest_sector_rankings()`.
+- **Top 5 Sinyal**: `get_top_signals_range()` (BARU) — top `raw_score` 7 hari terakhir.
+
+Diuji dgn mock data realistis (termasuk skenario SEMUA sumber gagal sekaligus)
+sebelum dianggap aman — pesan yang dihasilkan persis cocok format yang diminta user.
+
+### ⏮️ `backfill_patterns` ditambahkan ke `weekly_maintenance.yml`
+Sesuai request — step baru "🔎 Backfill Trend/Pattern" jalan tiap Sabtu,
+setelah DB Cleanup, sebelum Refresh Universe. Aman (idempotent, `continue-on-error`)
+karena cuma proses baris yang trend_structure-nya masih NULL.
+
+### 🎲 Ketemu & fix bug lain yang TIDAK berhubungan (sekalian, bukan disengaja cari)
+`tests/unit/test_core.py` (6 tempat) & `tests/smoke/test_smoke.py` (1 tempat):
+`pd.date_range(end=date.today(), periods=n, freq="B")` kembalikan `n-1` tanggal
+kalau `date.today()` jatuh di Sabtu/Minggu (pandas business-day anchor behavior).
+Baru ketahuan sekarang murni karena kebetulan tanggal jalan test = akhir pekan,
+sama sekali tidak terkait perubahan manapun di CHANGELOG ini. Diperbaiki dengan
+helper kecil yang mundurkan anchor ke business day terdekat sebelum generate range.
+
+
 ## v2.3.0 — Snapshot Sinyal Lengkap + Trend Structure & Pattern Detection (2026-08)
 
 ### 🔍 Audit dulu, baru kerja: sebagian besar sudah ada

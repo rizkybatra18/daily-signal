@@ -11,6 +11,20 @@ from datetime import date, timedelta
 
 # ── Fixtures ────────────────────────────────────────────────────────
 
+def _bday_end_anchor() -> pd.Timestamp:
+    """
+    AUDIT: date.today() bisa jatuh di Sabtu/Minggu -- pd.date_range(end=X,
+    periods=n, freq='B') kembaliin n-1 tanggal kalau end bukan business
+    day (ketemu tanpa sengaja pas run test di akhir pekan, tidak ada
+    hubungannya sama fitur lain yg diaudit sesi ini). Dipakai gantiin
+    date.today() langsung di semua date_range(freq='B') pada file ini.
+    """
+    end = pd.Timestamp(date.today())
+    if end.weekday() >= 5:  # Sabtu=5, Minggu=6
+        end -= pd.tseries.offsets.BDay(1)
+    return end
+
+
 def make_ohlcv(n=100, trend="up", base_price=1000.0) -> pd.DataFrame:
     """Buat DataFrame OHLCV sintetis untuk testing."""
     np.random.seed(42)
@@ -26,7 +40,7 @@ def make_ohlcv(n=100, trend="up", base_price=1000.0) -> pd.DataFrame:
         closes.append(closes[-1] * (1 + change))
 
     closes = np.array(closes)
-    dates = pd.date_range(end=date.today(), periods=n, freq="B")
+    dates = pd.date_range(end=_bday_end_anchor(), periods=n, freq="B")
 
     return pd.DataFrame({
         "open":   closes * np.random.uniform(0.995, 1.005, n),
@@ -104,7 +118,7 @@ class TestATR:
         from src.signals.ta_engine import calc_atr
         np.random.seed(42)
         n = 60
-        dates = pd.date_range(end=date.today(), periods=n, freq="B")
+        dates = pd.date_range(end=_bday_end_anchor(), periods=n, freq="B")
         closes = 1000 + np.cumsum(np.random.normal(0, 1, n))
 
         # Saham stable
@@ -250,7 +264,7 @@ class TestMarketRegime:
         # Buat downtrend tajam (drop 10% dalam 5 hari)
         n = 30
         closes = 7000 * (0.99 ** np.arange(n))  # -1% per hari
-        dates = pd.date_range(end=date.today(), periods=n, freq="B")
+        dates = pd.date_range(end=_bday_end_anchor(), periods=n, freq="B")
         ihsg_df = pd.DataFrame({
             "open": closes, "high": closes * 1.002,
             "low": closes * 0.998, "close": closes,
@@ -359,7 +373,7 @@ class TestRelativeStrength:
         """Saham yang outperform IHSG harus punya RS positif."""
         from src.signals.ta_engine import calc_mansfield_rs
         n = 60
-        dates = pd.date_range(end=date.today(), periods=n, freq="B")
+        dates = pd.date_range(end=_bday_end_anchor(), periods=n, freq="B")
         # IHSG naik 5%
         ihsg = pd.Series(7000 * (1.001 ** np.arange(n)), index=dates)
         # Saham naik 15%
@@ -372,7 +386,7 @@ class TestRelativeStrength:
         """Saham yang underperform IHSG harus punya RS negatif."""
         from src.signals.ta_engine import calc_mansfield_rs
         n = 60
-        dates = pd.date_range(end=date.today(), periods=n, freq="B")
+        dates = pd.date_range(end=_bday_end_anchor(), periods=n, freq="B")
         # IHSG naik 10%
         ihsg = pd.Series(7000 * (1.002 ** np.arange(n)), index=dates)
         # Saham turun 5%
@@ -384,7 +398,7 @@ class TestRelativeStrength:
     def test_empty_benchmark_no_crash(self):
         from src.signals.ta_engine import calc_mansfield_rs
         n = 30
-        dates = pd.date_range(end=date.today(), periods=n, freq="B")
+        dates = pd.date_range(end=_bday_end_anchor(), periods=n, freq="B")
         stock = pd.Series(np.ones(n) * 1000, index=dates)
         rs = calc_mansfield_rs(stock, pd.Series([], dtype=float))
         assert rs is not None
