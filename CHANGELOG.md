@@ -2,6 +2,55 @@
 
 ---
 
+## v2.4.0 — Modul Broker Flow / Bandarmology (Kerangka, Belum Aktif) (2026-08)
+
+### ✨ Fitur Baru: Broker Summary & Broker Flow
+Kerangka modul bandarmology terintegrasi (bukan tools terpisah): tabel baru,
+provider abstraction, engine analisis, halaman dashboard. **BELUM AKTIF
+secara default** (`BROKER_SCAN_ENABLED=False`) karena provider data vendor
+belum dipilih/dikonfigurasi — lihat catatan di bawah.
+
+- **`migrations/004_broker_summary.sql`** (baru) — tabel `broker_summary`
+  (transaksi per broker per saham per hari) + `broker_classification`
+  (asing/domestik/BUMN, di-seed contoh 9 broker, PERLU DILENGKAPI &
+  diverifikasi manual — bukan data resmi IDX) + view
+  `v_broker_net_flow_daily` (agregat net flow) + view
+  `v_ticker_avg_volume_20d` (buat pilih saham paling likuid sebelum
+  broker scan, hemat quota API vendor).
+- **`src/providers/broker_data.py`** (baru) — `BaseBrokerDataProvider`
+  abstraction mengikuti pola persis `market_data.py`. Default
+  `NotConfiguredProvider` sengaja gagal EKSPLISIT (bukan silent no-op)
+  kalau dipanggil sebelum provider vendor dipilih.
+- **`src/signals/broker_engine.py`** (baru) — analisis net flow per
+  saham, top buyer/seller broker, konsentrasi top-3 broker, streak
+  akumulasi. Murni baca dari DB, tidak fetch — bisa langsung dipakai
+  begitu `broker_summary` mulai terisi, apapun vendor yang dipilih.
+- **`src/core/database.py`** — fungsi baru: `bulk_insert_broker_summary`,
+  `get_broker_flow_range`, `get_broker_classification`,
+  `get_top_liquid_tickers`.
+- **`src/core/config.py`** — setting baru: `broker_data_provider`,
+  `broker_scan_enabled` (default `False`), `broker_scan_top_n` (default 100).
+- **`src/runner.py`** — command baru `broker_scan` (`cmd_broker_scan`),
+  no-op aman kalau `broker_scan_enabled=False`.
+- **`dashboard.py`** — halaman baru "Broker Flow" (leaderboard net flow +
+  chart per saham), tampil "belum ada data" kalau `broker_summary` kosong.
+  BELUM masuk composite scoring (`raw_score`) — murni informasional
+  sampai ada validasi empiris memadai (pola sama dgn AUDIT di `ta_engine.py`).
+
+### ⚠️ BELUM SELESAI — keputusan yang masih perlu diambil
+1. **Sumber data broker summary belum dipilih.** `idx.co.id` melarang
+   scraping di ToS + bot-blocked (sama seperti temuan Universe Manager
+   di `AUDIT_REPORT_v2.md`) — jalan yang konsisten adalah vendor API
+   berbayar (Invezgo, Sectors.app, dll), BUKAN scraper. Kerangka provider
+   di `broker_data.py` sudah siap, tinggal isi 1 kelas provider konkret.
+2. **`broker_classification` cuma di-seed 9 broker sebagai contoh** —
+   perlu dilengkapi & diverifikasi dari sumber yang bisa dipercaya
+   sebelum dipakai serius untuk analisis foreign flow.
+3. Migration 004 belum dijalankan di Supabase (jalankan manual di SQL
+   Editor seperti migration 001-003).
+
+---
+
 ## v2.3.1 — Weekly Report Beneran Kirim Weekly Report (2026-08)
 
 ### 🐛 Bug ditemukan dari laporan user: pesan Telegram salah total

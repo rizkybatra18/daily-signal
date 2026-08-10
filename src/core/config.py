@@ -134,11 +134,19 @@ class Settings(BaseSettings):
     # Berapa hari bursa maksimum sebuah sinyal dipantau sebelum
     # dianggap EXPIRED jika TP/SL belum tersentuh — lihat
     # src/signals/signal_evaluator.py.
-    signal_max_holding_days: int = 20
+    signal_max_holding_days: int = 10
 
     # ── Data History ──────────────────────────────────────────────
     history_days_warmup: int = 252    # ~1 tahun untuk warm up indikator
     history_days_scan: int = 252      # Data yang diambil untuk scan
+
+    # ── Broker Summary / Bandarmology (migration 004) ─────────────
+    # BROKER_DATA_PROVIDER kosong = fitur nonaktif (NotConfiguredProvider,
+    # lihat src/providers/broker_data.py). Isi dengan nama vendor setelah
+    # provider konkret diimplementasikan & subscription aktif.
+    broker_data_provider: str = ""
+    broker_scan_enabled: bool = False   # matikan cmd_broker_scan sampai provider siap
+    broker_scan_top_n: int = 100        # cuma scan N saham teratas by liquidity (hemat API quota vendor)
 
 
 settings = Settings()

@@ -602,3 +602,119 @@ def signal_result_exists(ticker: str, signal_date: str, signal_type: str) -> boo
         return (result.count or 0) > 0
     except Exception:
         return False
+
+
+# ══════════════════════════════════════════════════════════════════
+#  BROKER SUMMARY — Bandarmology (migration 004, additif)
+#  Provider fetch: src/providers/broker_data.py
+#  Analisis: src/signals/broker_engine.py
+# ══════════════════════════════════════════════════════════════════
+
+def bulk_insert_broker_summary(rows: list[dict], source_provider: str) -> int:
+    """
+    Bulk upsert broker_summary. net_volume/net_value dihitung DI SINI
+    (bukan tanggung jawab provider) supaya konsisten apapun vendor-nya --
+    lihat kontrak di BaseBrokerDataProvider (src/providers/broker_data.py).
+    Batch kecil + retry, mengikuti pola bulk_insert_prices (Supabase nano
+    sensitif terhadap request paralel/besar).
+    """
+    import time as _time
+    if not rows:
+        return 0
+
+    db = get_db()
+    total_inserted = 0
+    batch_size = 100
+
+    payload = []
+    for r in rows:
+        buy_vol = r.get("buy_volume") or 0
+        sell_vol = r.get("sell_volume") or 0
+        buy_val = r.get("buy_value") or 0
+        sell_val = r.get("sell_value") or 0
+        payload.append({
+            **r,
+            "net_volume": buy_vol - sell_vol,
+            "net_value": buy_val - sell_val,
+            "source_provider": source_provider,
+        })
+
+    for i in range(0, len(payload), batch_size):
+        batch = payload[i:i + batch_size]
+        for attempt in range(3):
+            try:
+                db.table("broker_summary").upsert(
+                    batch, on_conflict="ticker,trade_date,broker_code"
+                ).execute()
+                total_inserted += len(batch)
+                _time.sleep(0.1)
+                break
+            except Exception as e:
+                err_str = str(e)
+                if attempt < 2:
+                    _time.sleep((attempt + 1) * 1.0)
+                    continue
+                from src.core.logger import get_logger
+                log = get_logger("database")
+                log.error(f"Gagal bulk insert broker_summary: {err_str[:200]}")
+                break
+
+    return total_inserted
+
+
+def get_broker_flow_range(ticker: str, days: int = 30) -> list[dict]:
+    """Ambil net flow harian (view v_broker_net_flow_daily) N hari terakhir untuk 1 ticker."""
+    try:
+        from datetime import date as _date, timedelta as _timedelta
+        db = get_db()
+        since = (_date.today() - _timedelta(days=days)).isoformat()
+        result = (
+            db.table("v_broker_net_flow_daily")
+            .select("*")
+            .eq("ticker", ticker)
+            .gte("trade_date", since)
+            .order("trade_date", desc=True)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        from src.core.logger import get_logger
+        log = get_logger("database")
+        log.error(f"Gagal ambil broker flow range {ticker}: {e}")
+        return []
+
+
+def get_broker_classification() -> dict[str, dict]:
+    """Ambil seluruh broker_classification sebagai dict {broker_code: {name, investor_type}}."""
+    try:
+        db = get_db()
+        result = db.table("broker_classification").select("*").eq("is_active", True).execute()
+        return {r["broker_code"]: r for r in (result.data or [])}
+    except Exception:
+        return {}
+
+
+def get_top_liquid_tickers(n: int = 100) -> list[str]:
+    """
+    Ambil N ticker paling likuid (avg volume 20 hari tertinggi) dari
+    v_ticker_avg_volume_20d (migration 004). Dipakai cmd_broker_scan
+    supaya tidak boros quota API vendor broker summary dengan scan
+    seluruh universe (~550 ticker) yang sebagian besar jarang aktif.
+    Fallback: list kosong kalau view belum ada / gagal query (caller
+    WAJIB handle list kosong, jangan asumsikan selalu terisi).
+    """
+    try:
+        db = get_db()
+        result = (
+            db.table("v_ticker_avg_volume_20d")
+            .select("ticker")
+            .order("avg_volume_20d", desc=True)
+            .limit(n)
+            .execute()
+        )
+        return [r["ticker"] for r in (result.data or [])]
+    except Exception as e:
+        from src.core.logger import get_logger
+        log = get_logger("database")
+        log.error(f"Gagal ambil top liquid tickers: {e}")
+        return []

@@ -500,6 +500,21 @@ def load_signal_results(days=90, status=None):
     except: return []
 
 
+@st.cache_data(ttl=300)
+def load_broker_flow_top(limit=20):
+    """Top saham berdasarkan net broker flow hari terakhir yang ada datanya."""
+    try:
+        from src.signals.broker_engine import get_top_accumulated_tickers
+        return get_top_accumulated_tickers(limit=limit)
+    except: return []
+
+@st.cache_data(ttl=300)
+def load_broker_flow_detail(ticker, days=30):
+    try:
+        from src.core.database import get_broker_flow_range
+        return get_broker_flow_range(ticker, days=days)
+    except: return []
+
 @st.cache_data(ttl=180)
 def load_signal_results_all_closed():
     """Semua sinyal CLOSED/EXPIRED (tanpa batas hari) — untuk statistik jangka panjang."""
@@ -523,6 +538,7 @@ PAGES = [
     ("history", "📅", "Historical Signals"),
     ("performance", "📊", "Signal Performance"),
     ("sector", "🏭", "Sector Rotation"),
+    ("broker", "🕵️", "Broker Flow"),
     # ("portfolio", "💼", "Portfolio"),  # DISEMBUNYIKAN dari UI — Signal
     # Performance sekarang pakai signal_results (Automatic Signal
     # Evaluation), bukan lagi Portfolio manual. Fungsi page_portfolio()
@@ -1500,6 +1516,74 @@ def page_sector_rotation():
 
 
 # ══════════════════════════════════════════════════════════════════
+#  PAGE — BROKER FLOW (Bandarmology)
+#  BARU — belum ada di composite scoring (raw_score), murni informasional
+#  sampai ada validasi empiris memadai (pola sama dgn AUDIT di ta_engine.py).
+#  Kosong sampai provider di src/providers/broker_data.py dikonfigurasi.
+# ══════════════════════════════════════════════════════════════════
+
+def page_broker_flow():
+    st.markdown('<div class="ds-page-title">Broker Flow</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ds-page-sub">Akumulasi/distribusi broker per saham (bandarmology). Belum masuk composite scoring.</div>', unsafe_allow_html=True)
+
+    top = load_broker_flow_top(limit=20)
+    if not top:
+        st.info(
+            "Data broker summary belum tersedia. Provider belum dikonfigurasi — "
+            "lihat src/providers/broker_data.py dan set BROKER_DATA_PROVIDER di .env."
+        )
+        return
+
+    df = pd.DataFrame(top)
+    for col in ["total_net_value", "foreign_net_value", "domestic_net_value", "bumn_net_value", "broker_count"]:
+        if col in df.columns:
+            df[col] = df[col].apply(sf)
+
+    snap_date = ss(df["trade_date"].iloc[0], "—") if "trade_date" in df.columns and not df.empty else "—"
+    section(f"TOP AKUMULASI — {snap_date}", "🕵️")
+
+    for i, row in df.iterrows():
+        ticker  = ss(row.get("ticker"), "—")
+        net     = sf(row.get("total_net_value"))
+        fnet    = sf(row.get("foreign_net_value"))
+        dnet    = sf(row.get("domestic_net_value"))
+        bcount  = si(row.get("broker_count"))
+        net_c   = "#4ade80" if net > 0 else "#f87171"
+        f_c     = "#4ade80" if fnet > 0 else "#f87171"
+
+        st.markdown(
+            f'<div class="ds-card" style="padding:14px 20px;margin-bottom:8px">'
+            f'<div style="display:flex;align-items:center;gap:14px">'
+            f'<div style="width:36px;font-size:1.1rem">#{i+1}</div>'
+            f'<div style="width:110px;font-weight:700">{ticker}</div>'
+            f'<div class="ds-num" style="width:160px;text-align:right;color:{net_c}">Net Rp{net:,.0f}</div>'
+            f'<div class="ds-num" style="width:160px;text-align:right;color:{f_c}">Asing Rp{fnet:,.0f}</div>'
+            f'<div class="ds-num" style="width:150px;text-align:right;color:#9aa4b8">Domestik Rp{dnet:,.0f}</div>'
+            f'<div class="ds-num" style="width:90px;text-align:right;color:#9aa4b8">{bcount} broker</div>'
+            f'</div></div>',
+            unsafe_allow_html=True
+        )
+
+    section("DETAIL PER SAHAM", "🔍")
+    ticker_pick = st.selectbox("Pilih saham", df["ticker"].tolist() if "ticker" in df.columns else [])
+    if ticker_pick:
+        detail = load_broker_flow_detail(ticker_pick, days=30)
+        if detail:
+            ddf = pd.DataFrame(detail).sort_values("trade_date")
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=ddf["trade_date"], y=ddf["total_net_value"],
+                marker_color=[("#00c896" if v > 0 else "#f87171") for v in ddf["total_net_value"]],
+                name="Net Value"
+            ))
+            fig.update_layout(title=f"Net Broker Flow — {ticker_pick} (30 hari)", height=340,
+                              **LAYOUT)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.caption("Belum ada histori broker flow untuk saham ini.")
+
+
+# ══════════════════════════════════════════════════════════════════
 #  PAGE — PORTFOLIO
 # ══════════════════════════════════════════════════════════════════
 
@@ -1679,6 +1763,7 @@ def main():
         "history":     page_historical_signals,
         "performance": page_signal_performance,
         "sector":      page_sector_rotation,
+        "broker":      page_broker_flow,
         "portfolio":   page_portfolio,
         "health":      page_system_health,
     }

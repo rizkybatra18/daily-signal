@@ -110,6 +110,48 @@ def cmd_daily_scan(args):
         log.error(f"⚠ Signal evaluation gagal (tidak menggagalkan daily scan): {e}")
 
 
+def cmd_broker_scan(args):
+    """
+    Ambil broker summary hari ini untuk top-N saham (by liquidity) dan
+    simpan ke tabel broker_summary. Terpisah dari cmd_daily_scan supaya
+    bisa dimatikan lewat BROKER_SCAN_ENABLED tanpa menyentuh alur utama.
+
+    BELUM AKTIF secara default (settings.broker_scan_enabled=False) --
+    provider konkret di src/providers/broker_data.py belum dipilih.
+    """
+    if not settings.broker_scan_enabled:
+        log.info(
+            "Broker scan dimatikan (BROKER_SCAN_ENABLED=False). "
+            "Set BROKER_DATA_PROVIDER + BROKER_SCAN_ENABLED=True di .env "
+            "setelah provider di src/providers/broker_data.py siap."
+        )
+        return
+
+    from datetime import date as _date
+    from src.providers.broker_data import BrokerDataProvider
+    from src.core.database import bulk_insert_broker_summary, get_top_liquid_tickers
+
+    log.info("▶ Menjalankan broker summary scan...")
+    provider = BrokerDataProvider()
+
+    tickers = get_top_liquid_tickers(n=settings.broker_scan_top_n)
+    if not tickers:
+        log.warning(
+            "get_top_liquid_tickers() kosong (migration 004 belum dijalankan, "
+            "atau daily_prices belum cukup terisi). Broker scan dibatalkan."
+        )
+        return
+    today = _date.today()
+
+    results = provider.fetch_batch(tickers, trade_date=today)
+
+    total_rows = 0
+    for ticker, rows in results.items():
+        total_rows += bulk_insert_broker_summary(rows, source_provider=provider.provider_name)
+
+    log.info(f"✓ Broker scan selesai: {len(results)}/{len(tickers)} ticker, {total_rows} baris broker_summary")
+
+
 def cmd_pre_market(args):
     """
     Kirim alert pre-market (08:30 WIB).
@@ -411,7 +453,7 @@ def main():
         "test_telegram",
         "refresh_universe", "run_backtests", "db_cleanup",
         "update_portfolio", "portfolio_snapshot", "weekly_report",
-        "evaluate_signals", "backfill_patterns",
+        "evaluate_signals", "backfill_patterns", "broker_scan",
     ])
     parser.add_argument("--limit", type=int, default=50)
 
@@ -430,6 +472,7 @@ def main():
         "weekly_report":     cmd_weekly_report,
         "evaluate_signals":  cmd_evaluate_signals,
         "backfill_patterns": cmd_backfill_patterns,
+        "broker_scan":       cmd_broker_scan,
     }
 
     try:
