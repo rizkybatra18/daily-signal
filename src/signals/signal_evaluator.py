@@ -270,15 +270,24 @@ def capture_todays_signals(signal_date: Optional[str] = None) -> dict:
                 reasons = list(fc["highlights"])
 
             # trend_structure & pattern_detected (BARU) -- lihat pattern_engine.py.
-            # rsi_series dibutuhkan buat divergence, dihitung ulang di sini
-            # (bukan reuse dari `sig` yang cuma simpan nilai RSI terakhir).
-            trend_structure = None
+            # AUDIT (2026-08, ditemukan saat audit menyeluruh): trend_structure
+            # SEBELUMNYA dihitung ULANG di sini secara independen dari yang
+            # dipakai live scoring (_score_trend di ta_engine.py, migration 006).
+            # Karena keduanya jalan dari data yang sama, hasilnya SELALU sama
+            # secara praktis -- tapi ini persis pola "2 sumber kebenaran" yang
+            # sudah terbukti berisiko (lihat AUDIT backtest/engine.py poin 4).
+            # Diperbaiki: REUSE nilai yang sudah tersimpan di `sig` (hasil
+            # analyze_stock() yang SUNGGUHAN dipakai untuk trend_score hari
+            # itu) -- hanya recompute sebagai fallback untuk data lama
+            # sebelum migration 006 (kolom belum ada/masih NULL).
+            trend_structure = sig.get("trend_structure")
             pattern_detected: list[str] = []
-            if ohlcv is not None and not ohlcv.empty:
+            if trend_structure is None and ohlcv is not None and not ohlcv.empty:
                 try:
                     trend_structure = detect_trend_structure(ohlcv)
                 except Exception as e:
                     log.debug(f"{ticker}: detect_trend_structure gagal: {e}")
+            if ohlcv is not None and not ohlcv.empty:
                 try:
                     rsi_series = calc_rsi(ohlcv["close"], settings.rsi_period)
                     pattern_detected = detect_all_patterns(
@@ -354,6 +363,9 @@ def capture_todays_signals(signal_date: Optional[str] = None) -> dict:
                 "volume_score": sig.get("volume_score"),
                 "strength_score": sig.get("strength_score"),
                 "volatility_score": sig.get("volatility_score"),
+                "flow_score": sig.get("flow_score"),
+                "cmf": sig.get("cmf"),
+                "vsa_signal": sig.get("vsa_signal"),
                 "sector_bonus": sig.get("sector_bonus"),
                 "regime_weight": regime_weight,
                 "raw_score": sig.get("raw_score"),

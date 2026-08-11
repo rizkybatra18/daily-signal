@@ -17,8 +17,29 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional
 from src.core.config import settings
 from src.core.logger import get_logger
+from src.signals.pattern_engine import detect_trend_structure
 
 log = get_logger("ta_engine")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  SCORE CAPS (v2.5.0, 2026-08)
+#  SATU tempat sumber kebenaran untuk cap tiap komponen composite score.
+#  Dulu tiap kali cap berubah (co. trend_score 30->20), angka hardcoded-nya
+#  tersebar & ada yang lupa disesuaikan (lihat AUDIT di bot.py/dashboard.py
+#  yang sempat ketinggalan). SEKARANG: ubah cap DI SINI SAJA, tempat lain
+#  (highlight threshold, tampilan dashboard, telegram) import konstanta
+#  ini, TIDAK boleh hardcode ulang angkanya.
+# ═══════════════════════════════════════════════════════════════════════
+TREND_SCORE_CAP      = 22.0   # SEBELUMNYA 30, lalu 20 -- lihat AUDIT CompositeScore
+MOMENTUM_SCORE_CAP   = 25.0
+VOLUME_SCORE_CAP     = 20.0
+STRENGTH_SCORE_CAP   = 21.0
+VOLATILITY_SCORE_CAP = 2.0    # SEBELUMNYA 10, lalu 4 -- lihat AUDIT CompositeScore
+FLOW_SCORE_CAP       = 10.0   # BARU
+TOTAL_SCORE_CAP      = (TREND_SCORE_CAP + MOMENTUM_SCORE_CAP + VOLUME_SCORE_CAP +
+                         STRENGTH_SCORE_CAP + VOLATILITY_SCORE_CAP + FLOW_SCORE_CAP)
+assert TOTAL_SCORE_CAP == 100.0, f"Total cap harus 100, sekarang {TOTAL_SCORE_CAP}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -35,6 +56,7 @@ class TrendIndicators:
     price_vs_ema200: float = 0.0
     ema_alignment: str = "NEUTRAL"  # BULLISH/NEUTRAL/BEARISH
     trend_direction: str = "SIDEWAYS"
+    structure: Optional[str] = None  # BARU (v2.5.0) -- dari pattern_engine.detect_trend_structure()
 
 
 @dataclass
@@ -81,6 +103,25 @@ class VolatilityIndicators:
 
 
 @dataclass
+class FlowIndicators:
+    """
+    Proxy bandarmology GRATIS -- dihitung murni dari OHLCV yang sudah
+    ada (Yahoo Finance), TANPA data broker/institusi sungguhan. Bukan
+    pengganti broker summary asli (lihat src/providers/broker_data.py,
+    belum ada provider), tapi price-volume relationship yang secara
+    metodologis dipakai luas (OBV oleh Joseph Granville, A/D Line +
+    CMF oleh Marc Chaikin, VSA oleh Tom Williams) untuk menaksir apakah
+    volume yang terjadi mencerminkan akumulasi atau distribusi.
+    """
+    obv: float = 0.0
+    obv_slope_pct: float = 0.0      # % perubahan OBV vs 10 hari lalu -- arah akumulasi
+    ad_line: float = 0.0            # Accumulation/Distribution Line (cumulative)
+    cmf: float = 0.0                # Chaikin Money Flow, 20 hari, range -1..+1
+    mfi: float = 50.0               # Money Flow Index, 14 hari, range 0..100
+    vsa_signal: str = "NEUTRAL"     # ACCUMULATION/DISTRIBUTION/CLIMAX_UP/CLIMAX_DOWN/NO_DEMAND/NEUTRAL
+
+
+@dataclass
 class RiskLevels:
     entry_price: float = 0.0
     stop_loss: float = 0.0
@@ -99,14 +140,30 @@ class CompositeScore:
     """
     Composite Score 0-100.
 
-    Formula:
-        trend_score     = 0-30  (EMA alignment, price position)
+    Formula (v2.4.0 -- lihat AUDIT di bawah untuk alasan trend_score
+    dipotong & flow_score baru ditambahkan):
+        trend_score     = 0-22  (EMA alignment + structure -- SEBELUMNYA 0-30, lalu 0-20)
         momentum_score  = 0-25  (RSI zone, MACD direction)
         volume_score    = 0-20  (volume ratio, spike)
-        strength_score  = 0-15  (ADX, relative strength)
-        volatility_score= 0-10  (ATR position, BB squeeze)
+        strength_score  = 0-21  (ADX, relative strength)
+        volatility_score= 0-2   (ATR position, BB squeeze -- SEBELUMNYA 0-10, lalu 0-4)
+        flow_score      = 0-10  (proxy bandarmology gratis dari OBV/CMF/MFI/VSA)
         ─────────────────────────
         Total           = 0-100
+
+    AUDIT (trend_score dipotong 30->20, 2026-08, lihat analisis
+    signal_results n=265, 27 Jul-7 Aug 2026): trend_score BERKORELASI
+    NEGATIF dengan net_return_pct aktual (kuartil terendah->tertinggi:
+    +9.2% -> +8.5% -> +4.6% -> +4.8%). Sample masih dari 1 live stream
+    yang sama dgn audit strength/volatility_score sebelumnya (bukan
+    sample independen baru), dan 93.5% masih regime BULL -- JANGAN
+    balik arah formulanya dulu (logic internal EMA-alignment tidak
+    terbukti salah, bisa jadi cuma redundan dgn strength_score/ADX),
+    cukup diskon bobotnya dulu mengikuti pola volatility_score. 10 poin
+    yang dipotong dipindah ke flow_score (baru) -- BUKAN redistribusi
+    ke trend_score sendiri. Re-validasi berkala lewat dashboard Score
+    Calibration seiring data live bertambah (target >=300 sinyal,
+    idealnya juga cakupan regime SIDEWAYS/BEAR yang sekarang minim).
 
     AUDIT (Adaptive Threshold): raw_score (+ sector_bonus, sebelum
     dikali regime_weight) yang dipakai untuk klasifikasi signal_type,
@@ -118,6 +175,7 @@ class CompositeScore:
     volume_score: float = 0.0
     strength_score: float = 0.0
     volatility_score: float = 0.0
+    flow_score: float = 0.0
     raw_score: float = 0.0          # Sum sebelum regime adjustment (+ sector bonus)
     sector_bonus: float = 0.0        # +5/-5/0 dari sector rotation, sudah masuk raw_score
     regime_weight: float = 1.0       # Multiplier dari market regime (untuk display)
@@ -141,6 +199,7 @@ class StockAnalysis:
     strength: StrengthIndicators = field(default_factory=StrengthIndicators)
     volume: VolumeIndicators = field(default_factory=VolumeIndicators)
     volatility: VolatilityIndicators = field(default_factory=VolatilityIndicators)
+    flow: FlowIndicators = field(default_factory=FlowIndicators)
     risk: RiskLevels = field(default_factory=RiskLevels)
     score: CompositeScore = field(default_factory=CompositeScore)
     factor_contribution: dict = field(default_factory=dict)   # lihat build_factor_contribution()
@@ -170,6 +229,7 @@ class StockAnalysis:
             "ema20":  self.trend.ema20,
             "ema50":  self.trend.ema50,
             "ema200": self.trend.ema200,
+            "trend_structure": self.trend.structure,   # BARU (v2.5.0)
 
             # === MOMENTUM ===
             "rsi":         self.momentum.rsi,
@@ -188,6 +248,15 @@ class StockAnalysis:
 
             # === VOLATILITY ===
             "atr": self.volatility.atr,
+
+            # === FLOW (BARU -- proxy bandarmology gratis, migration 005) ===
+            "obv":            self.flow.obv,
+            "obv_slope_pct":  self.flow.obv_slope_pct,
+            "ad_line":        self.flow.ad_line,
+            "cmf":            self.flow.cmf,
+            "mfi":            self.flow.mfi,
+            "vsa_signal":     self.flow.vsa_signal,
+            "flow_score":     self.score.flow_score,
 
             # === RISK MANAGEMENT ===
             "entry_price":  self.risk.entry_price,
@@ -368,48 +437,173 @@ def calc_mansfield_rs(
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  INDIKATOR FLOW / BANDARMOLOGI-PROXY (BARU, migration 005)
+#  Semua murni dari OHLCV -- GRATIS, tidak butuh data broker. Lihat
+#  FlowIndicators docstring untuk atribusi metodologi.
+# ═══════════════════════════════════════════════════════════════════════
+
+def calc_obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    """
+    On-Balance Volume (Joseph Granville, 1963).
+    Volume ditambahkan penuh saat harga naik, dikurangi penuh saat
+    turun, netral saat flat. Cumulative -- yang penting SLOPE-nya
+    (lihat calc_obv_slope_pct), bukan nilai absolutnya.
+    """
+    direction = np.sign(close.diff().fillna(0))
+    return (direction * volume).fillna(0).cumsum()
+
+
+def calc_obv_slope_pct(obv: pd.Series, period: int = 10) -> pd.Series:
+    """% perubahan OBV vs N hari lalu -- proxy arah akumulasi/distribusi jangka pendek."""
+    obv_prev = obv.shift(period)
+    denom = obv_prev.abs().replace(0, np.nan)
+    return ((obv - obv_prev) / denom * 100).fillna(0)
+
+
+def calc_ad_line(df: pd.DataFrame) -> pd.Series:
+    """
+    Accumulation/Distribution Line (Marc Chaikin).
+    Money Flow Multiplier = ((close-low) - (high-close)) / (high-low)
+    -- posisi close dalam range hari itu, -1 (close=low) s/d +1 (close=high).
+    Dikali volume, cumulative.
+    """
+    high, low, close, volume = df["high"], df["low"], df["close"], df["volume"]
+    rng = (high - low).replace(0, np.nan)
+    mfm = (((close - low) - (high - close)) / rng).fillna(0)
+    return (mfm * volume).cumsum()
+
+
+def calc_cmf(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """
+    Chaikin Money Flow: rolling sum(Money Flow Volume) / rolling sum(Volume).
+    Range -1..+1. Beda dari A/D Line (cumulative) -- CMF ini OSCILLATOR,
+    lebih gampang dipakai threshold di scoring.
+    """
+    high, low, close, volume = df["high"], df["low"], df["close"], df["volume"]
+    rng = (high - low).replace(0, np.nan)
+    mfm = (((close - low) - (high - close)) / rng).fillna(0)
+    mfv = mfm * volume
+    return (mfv.rolling(period, min_periods=max(5, period // 2)).sum() /
+            volume.rolling(period, min_periods=max(5, period // 2)).sum().replace(0, np.nan)).fillna(0)
+
+
+def calc_mfi(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """
+    Money Flow Index -- RSI yang volume-weighted. Range 0-100.
+    Typical Price = (H+L+C)/3, Raw Money Flow = TP × Volume.
+    """
+    high, low, close, volume = df["high"], df["low"], df["close"], df["volume"]
+    tp = (high + low + close) / 3
+    raw_mf = tp * volume
+
+    tp_diff = tp.diff()
+    pos_mf = raw_mf.where(tp_diff > 0, 0.0)
+    neg_mf = raw_mf.where(tp_diff < 0, 0.0)
+
+    pos_sum = pos_mf.rolling(period, min_periods=max(5, period // 2)).sum()
+    neg_sum = neg_mf.rolling(period, min_periods=max(5, period // 2)).sum()
+
+    mfr = pos_sum / neg_sum.replace(0, np.nan)
+    mfi = 100 - (100 / (1 + mfr))
+    return mfi.fillna(50.0)
+
+
+def calc_vsa_signal(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """
+    Klasifikasi bar ala Volume Spread Analysis (Tom Williams / Wyckoff).
+    Bandingkan volume & range hari ini vs rata-rata N hari, plus posisi
+    close dalam range hari itu, untuk menaksir siapa yang "menang" --
+    pembeli besar menyerap jualan (ACCUMULATION) atau sebaliknya
+    (DISTRIBUTION), atau tanda exhaustion (CLIMAX_UP/DOWN), atau rally
+    lemah tanpa partisipasi volume (NO_DEMAND).
+
+    INI HEURISTIK, bukan sinyal pasti -- dipakai sebagai salah satu
+    input _score_flow(), bukan berdiri sendiri.
+    """
+    high, low, close, volume = df["high"], df["low"], df["close"], df["volume"]
+    rng = high - low
+    avg_range = rng.rolling(period, min_periods=max(5, period // 2)).mean()
+    avg_vol = volume.rolling(period, min_periods=max(5, period // 2)).mean()
+    close_pos = ((close - low) / rng.replace(0, np.nan)).fillna(0.5)
+    price_up = close.diff() > 0
+
+    vol_ratio = volume / avg_vol.replace(0, np.nan)
+    range_ratio = rng / avg_range.replace(0, np.nan)
+
+    result = pd.Series("NEUTRAL", index=df.index)
+
+    climax_mask = (vol_ratio > 2.5) & (range_ratio > 1.5)
+    result[climax_mask & (close_pos > 0.6)] = "CLIMAX_UP"
+    result[climax_mask & (close_pos < 0.4)] = "CLIMAX_DOWN"
+
+    absorb_mask = (vol_ratio > 1.5) & (range_ratio < 1.2) & ~climax_mask
+    result[absorb_mask & (close_pos > 0.6)] = "ACCUMULATION"
+    result[absorb_mask & (close_pos < 0.4)] = "DISTRIBUTION"
+
+    no_demand_mask = (vol_ratio < 0.7) & price_up & ~climax_mask & ~absorb_mask
+    result[no_demand_mask] = "NO_DEMAND"
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  COMPOSITE SCORING ENGINE
 # ═══════════════════════════════════════════════════════════════════════
 
 def _score_trend(analysis: StockAnalysis, close: float) -> float:
     """
-    Trend Score: 0-30 poin
+    Trend Score: 0-22 poin (v2.5.0 -- SEBELUMNYA 0-30, lalu 0-20, lihat
+    AUDIT di CompositeScore docstring). +2 poin BARU dari trend_structure
+    (pattern_engine.detect_trend_structure) -- evidence: signal_results
+    n=368 (update 10 Agu 2026), trend_structure="Pullback" avg return
+    +8.9% (n=95, WR 89.5%) vs "Breakout" +4.0% (n=23, WR 82.6%). Dipindah
+    dari 2 poin volatility_score yang dipotong (lihat _score_volatility).
 
-    +12: EMA full alignment (close > EMA20 > EMA50 > EMA200)
-    +8:  Partial alignment (close > EMA20 > EMA50)
-    +4:  Minimal (close > EMA20)
-    +8:  Strong EMA20 gap (close > EMA20 by >2%)
-    +6:  Positive momentum (EMA20 trending up)
-    +4:  Medium-term uptrend (EMA50 > EMA200)
+    +8:  EMA full alignment (close > EMA20 > EMA50 > EMA200)
+    +5:  Partial alignment (close > EMA20 > EMA50)
+    +3:  Minimal (close > EMA20)
+    +5:  Strong EMA20 gap (close > EMA20 by >2%)
+    +4:  Positive momentum (EMA20 trending up)
+    +3:  Medium-term uptrend (EMA50 > EMA200)
+    +2:  Structure bonus (BARU) -- Pullback/Higher Low = +2, Consolidation = +1,
+         Higher High/Breakout = 0, Lower High/Lower Low = -1
     """
     score = 0.0
     t = analysis.trend
 
     if close > t.ema20 > t.ema50 > t.ema200 > 0:
-        score += 12
-    elif close > t.ema20 > t.ema50 > 0:
         score += 8
+    elif close > t.ema20 > t.ema50 > 0:
+        score += 5
     elif close > t.ema20 > 0:
-        score += 4
+        score += 3
 
     if t.ema20 > 0:
         gap_pct = (close - t.ema20) / t.ema20 * 100
-        if 0 < gap_pct <= 5:     score += 8
-        elif 5 < gap_pct <= 10:  score += 5
-        elif gap_pct > 10:       score += 2
-        elif -2 < gap_pct <= 0:  score += 3
+        if 0 < gap_pct <= 5:     score += 5
+        elif 5 < gap_pct <= 10:  score += 3
+        elif gap_pct > 10:       score += 1
+        elif -2 < gap_pct <= 0:  score += 2
 
     if t.ema50 > t.ema200 > 0:
-        score += 6
-    elif t.ema50 > 0 and t.ema200 > 0 and t.ema50 > t.ema200 * 0.98:
-        score += 3
-
-    if t.price_vs_ema20 > 1:
         score += 4
-    elif t.price_vs_ema20 > 0:
+    elif t.ema50 > 0 and t.ema200 > 0 and t.ema50 > t.ema200 * 0.98:
         score += 2
 
-    return min(score, 30.0)
+    if t.price_vs_ema20 > 1:
+        score += 3
+    elif t.price_vs_ema20 > 0:
+        score += 1
+
+    structure_bonus = {
+        "Pullback": 2, "Higher Low": 2,
+        "Consolidation": 1,
+        "Higher High": 0, "Breakout": 0,
+        "Lower High": -1, "Lower Low": -1,
+    }.get(t.structure or "", 0)
+    score += structure_bonus
+
+    return max(0.0, min(score, TREND_SCORE_CAP))
 
 
 def _score_momentum(analysis: StockAnalysis) -> float:
@@ -445,7 +639,7 @@ def _score_momentum(analysis: StockAnalysis) -> float:
     elif m.macd_line > m.macd_signal:
         score += 3
 
-    return min(score, 25.0)
+    return min(score, MOMENTUM_SCORE_CAP)
 
 
 def _score_volume(analysis: StockAnalysis) -> float:
@@ -475,7 +669,7 @@ def _score_volume(analysis: StockAnalysis) -> float:
     if v.volume_trend == "SURGE":      score += 5
     elif v.volume_trend == "INCREASING": score += 3
 
-    return min(score, 20.0)
+    return min(score, VOLUME_SCORE_CAP)
 
 
 def _score_strength(analysis: StockAnalysis) -> float:
@@ -529,44 +723,82 @@ def _score_strength(analysis: StockAnalysis) -> float:
     elif rs >= -5:          score += 1
     else:                   score += 0
 
-    return max(0.0, min(score, 21.0))
+    return max(0.0, min(score, STRENGTH_SCORE_CAP))
 
 
 def _score_volatility(analysis: StockAnalysis, close: float) -> float:
     """
-    Volatility Score: 0-4 poin (SEBELUMNYA 0-10 -- dipotong drastis)
+    Volatility Score: 0-2 poin (v2.5.0 -- SEBELUMNYA 0-10, lalu 0-4,
+    sekarang dipotong lagi jadi 0-2. 2 poin yang dipotong dipindah ke
+    trend_score sebagai structure bonus, lihat _score_trend.)
 
     ATR%: moderately volatile dianggap lebih baik dari sangat volatile
     Bollinger Position: near lower band = potensi rebound
 
-    AUDIT (data 63 sinyal live, 27-31 Jul 2026; RE-VALIDASI di n=140,
-    27 Jul-4 Aug 2026, lihat signal_results): volatility_score adalah
-    prediktor TERKUAT di seluruh fitur di KEDUA sample (korelasi -0.50
-    lalu -0.45 dengan net_return_pct) TAPI ARAHNYA TERBALIK dari asumsi
-    desain semula -- skor rendah (0-4 dari skala lama 0-10) konsisten
-    avg return tertinggi (+12.8% lalu +11.3%), skor menengah (4-7) jauh
-    lebih lemah (+0.7% lalu +3.4%). Pola ini makin kuat tervalidasi
-    dengan sample lebih besar, BUKAN artefak sample kecil. Preferensi
-    ATR%/BB-position di bawah BELUM diubah arahnya (belum divalidasi
-    per-komponen, cuma total volatility_score yang teruji) -- bobotnya
-    saja yang didiskon berat (10->4). JANGAN naikkan bobot ini lagi
-    tanpa re-validasi lewat Score Calibration di dashboard.
+    AUDIT (n=63, 27-31 Jul: rho=-0.50 → n=140, 27 Jul-4 Aug: rho=-0.45
+    → n=368, 27 Jul-10 Aug 2026: rho=-0.42, p<0.0001): volatility_score
+    KONSISTEN jadi prediktor terkuat/salah satu terkuat di SELURUH TIGA
+    sample yang makin besar, arahnya TETAP TERBALIK dari desain, dan
+    magnitudonya STABIL (-0.50 -> -0.45 -> -0.42, bukan meluruh ke nol)
+    -- ini pola nyata, bukan noise sample kecil. Preferensi ATR%/BB-
+    position di bawah TETAP belum diubah arahnya (masih belum divalidasi
+    per-komponen), bobotnya yang terus didiskon. JANGAN naikkan bobot
+    ini lagi tanpa re-validasi lewat Score Calibration di dashboard.
     """
     score = 0.0
     vol = analysis.volatility
 
     atr_pct = vol.atr_pct
-    if 1.0 <= atr_pct <= 4.0:    score += 2
-    elif 0.5 <= atr_pct < 1.0:   score += 1
-    elif 4.0 < atr_pct <= 6.0:   score += 1
+    if 1.0 <= atr_pct <= 4.0:    score += 1.0
+    elif 0.5 <= atr_pct < 1.0:   score += 0.5
+    elif 4.0 < atr_pct <= 6.0:   score += 0.5
     else:                          score += 0
 
     bp = vol.bb_position
-    if 0.1 <= bp <= 0.4:         score += 2
-    elif 0.4 < bp <= 0.6:        score += 1
+    if 0.1 <= bp <= 0.4:         score += 1.0
+    elif 0.4 < bp <= 0.6:        score += 0.5
     else:                          score += 0
 
-    return min(score, 4.0)
+    return min(score, VOLATILITY_SCORE_CAP)
+
+
+def _score_flow(analysis: StockAnalysis) -> float:
+    """
+    Flow Score: 0-10 poin (BARU, migration 005) -- proxy bandarmology
+    gratis dari OBV/CMF/MFI/VSA (lihat FlowIndicators). 10 poin ini
+    dipindah dari trend_score yang dipotong (lihat AUDIT di
+    CompositeScore), BUKAN nambah total cap 100.
+
+    BELUM ADA VALIDASI EMPIRIS (indikator baru, belum ada di
+    signal_results historis) -- bobot 0-10 ini kecil SENGAJA supaya
+    dampak ke raw_score kalau ternyata meleset juga kecil. Re-validasi
+    lewat dashboard Score Calibration begitu signal_results terisi
+    data dengan kolom flow_score (perlu minimal beberapa minggu live).
+
+    CMF: 0-4 poin | OBV slope: 0-3 poin | MFI: 0-2 poin | VSA: -2..+1 poin
+    """
+    score = 0.0
+    f = analysis.flow
+
+    if f.cmf > 0.15:        score += 4
+    elif f.cmf > 0.05:      score += 2
+    elif f.cmf > -0.05:     score += 1
+    else:                    score += 0
+
+    if f.obv_slope_pct > 5:      score += 3
+    elif f.obv_slope_pct > 0:    score += 1
+
+    mfi = f.mfi
+    if 40 <= mfi <= 75:      score += 2
+    elif 30 <= mfi < 40:     score += 1
+    elif mfi > 85:           score += 0
+
+    if f.vsa_signal == "ACCUMULATION":   score += 1
+    elif f.vsa_signal == "DISTRIBUTION": score -= 2
+    elif f.vsa_signal == "NO_DEMAND":    score -= 1
+    elif f.vsa_signal == "CLIMAX_UP":    score -= 1  # potensi exhaustion, bukan alasan beli
+
+    return max(0.0, min(score, FLOW_SCORE_CAP))
 
 
 def _calc_risk_levels(close: float, atr: float, direction: str = "BUY") -> RiskLevels:
@@ -681,12 +913,20 @@ def compute_confidence(raw_score: float, analysis: 'StockAnalysis') -> str:
          karena satu dimensi dominan menutupi dimensi lain yang lemah)
 
     Return: "Very High" | "High" | "Medium" | "Low"
+
+    AUDIT (2026-08, ditemukan saat integrasi flow_score): cap di `dims`
+    di bawah SUDAH BASI sebelum perubahan sesi ini pun -- strength_score
+    ditulis 15.0 padahal cap sebenarnya sudah 21 sejak audit DI-quality
+    sebelumnya (lihat _score_strength). Akibatnya strong_dims dihitung
+    dari rasio yang salah (penyebut kegedean -> systematically under-
+    count). Diperbaiki: pakai konstanta cap yang sama dengan _score_*,
+    BUKAN angka hardcoded lagi (lihat SCORE CAPS di atas modul ini).
     """
     dims = [
-        (analysis.score.trend_score, 30.0),
-        (analysis.score.momentum_score, 25.0),
-        (analysis.score.volume_score, 20.0),
-        (analysis.score.strength_score, 15.0),
+        (analysis.score.trend_score, TREND_SCORE_CAP),
+        (analysis.score.momentum_score, MOMENTUM_SCORE_CAP),
+        (analysis.score.volume_score, VOLUME_SCORE_CAP),
+        (analysis.score.strength_score, STRENGTH_SCORE_CAP),
     ]
     strong_dims = sum(1 for val, mx in dims if mx > 0 and (val / mx) >= 0.70)
 
@@ -709,7 +949,12 @@ def build_factor_contribution(analysis: 'StockAnalysis', sector_bonus: float = 0
     s = analysis.score
     highlights = []
 
-    if s.trend_score >= 24:
+    # Threshold di-skala ulang mengikuti pemotongan trend_score 30->20
+    # (2026-08, lihat AUDIT di CompositeScore) -- 24/30 lama = 16/20 baru.
+    # Threshold dinamis (TREND_SCORE_CAP × 0.8) -- BUKAN hardcoded lagi,
+    # supaya tidak ketinggalan lagi kalau cap berubah (lihat AUDIT v2
+    # di backtest/engine.py soal kenapa hardcoding ini bahaya).
+    if s.trend_score >= TREND_SCORE_CAP * 0.8:
         highlights.append("EMA Alignment kuat")
     if analysis.volume.volume_spike:
         highlights.append(f"Volume Spike {analysis.volume.volume_ratio:.1f}x")
@@ -732,12 +977,23 @@ def build_factor_contribution(analysis: 'StockAnalysis', sector_bonus: float = 0
     if sector_bonus > 0:
         highlights.append("Sektor sedang memimpin")
 
+    # Flow (BARU) -- lihat AUDIT flow_score, belum tervalidasi empiris
+    if analysis.flow.vsa_signal == "ACCUMULATION":
+        highlights.append("Pola VSA: Akumulasi")
+    elif analysis.flow.vsa_signal == "DISTRIBUTION":
+        highlights.append("⚠️ Pola VSA: Distribusi")
+    elif analysis.flow.vsa_signal == "NO_DEMAND":
+        highlights.append("⚠️ Rally Tanpa Volume (No Demand)")
+    if analysis.flow.cmf > 0.15:
+        highlights.append(f"Money Flow Positif Kuat (CMF {analysis.flow.cmf:.2f})")
+
     return {
         "trend": round(s.trend_score, 1),
         "momentum": round(s.momentum_score, 1),
         "volume": round(s.volume_score, 1),
         "strength": round(s.strength_score, 1),
         "volatility": round(s.volatility_score, 1),
+        "flow": round(s.flow_score, 1),
         "sector_bonus": round(sector_bonus, 1),
         "total_raw": round(s.raw_score, 1),
         "highlights": highlights,
@@ -747,6 +1003,21 @@ def build_factor_contribution(analysis: 'StockAnalysis', sector_bonus: float = 0
 # ═══════════════════════════════════════════════════════════════════════
 #  MAIN ANALYSIS FUNCTION
 # ═══════════════════════════════════════════════════════════════════════
+
+def _safe_detect_trend_structure(df: pd.DataFrame) -> Optional[str]:
+    """
+    Wrapper defensif untuk detect_trend_structure (pattern_engine.py) --
+    dipakai di analyze_stock() DAN backtest/engine.py supaya keduanya
+    identik. Gagal diam-diam (return None) kalau data kurang/error,
+    TIDAK boleh bikin seluruh analyze_stock() gagal cuma gara-gara
+    struktur trend tidak terklasifikasi.
+    """
+    try:
+        return detect_trend_structure(df)
+    except Exception as e:
+        log.debug(f"detect_trend_structure gagal: {e}")
+        return None
+
 
 def analyze_stock(
     ticker: str,
@@ -808,6 +1079,14 @@ def analyze_stock(
             rs_series = calc_mansfield_rs(close, ihsg_close, period=20)
         else:
             rs_series = pd.Series([0.0] * len(close), index=close.index)
+
+        # Flow (BARU) -- murni dari OHLCV, tidak butuh IHSG/data eksternal lain
+        obv_series = calc_obv(close, df["volume"])
+        obv_slope_series = calc_obv_slope_pct(obv_series, period=10)
+        ad_line_series = calc_ad_line(df)
+        cmf_series = calc_cmf(df, period=20)
+        mfi_series = calc_mfi(df, period=14)
+        vsa_series = calc_vsa_signal(df, period=20)
 
         # ── Extract Nilai Terbaru ────────────────────────────────
 
@@ -921,6 +1200,7 @@ def analyze_stock(
                 price_vs_ema50=round(price_vs_ema50, 2),
                 price_vs_ema200=round(price_vs_ema200, 2),
                 ema_alignment=ema_align,
+                structure=_safe_detect_trend_structure(df),
             ),
             momentum=MomentumIndicators(
                 rsi=round(safe_float(rsi), 1),
@@ -961,6 +1241,14 @@ def analyze_stock(
                 bb_position=round(bb_pos, 3),
                 bb_squeeze=bb_squeeze,
             ),
+            flow=FlowIndicators(
+                obv=round(safe_float(obv_series), 0),
+                obv_slope_pct=round(safe_float(obv_slope_series), 2),
+                ad_line=round(safe_float(ad_line_series), 0),
+                cmf=round(safe_float(cmf_series), 4),
+                mfi=round(safe_float(mfi_series), 1),
+                vsa_signal=str(vsa_series.iloc[-1]) if len(vsa_series) else "NEUTRAL",
+            ),
         )
 
         # ── Scoring ─────────────────────────────────────────────
@@ -970,8 +1258,10 @@ def analyze_stock(
         volume_score = _score_volume(analysis)
         strength_score = _score_strength(analysis)
         volatility_score = _score_volatility(analysis, last_close)
+        flow_score = _score_flow(analysis)
 
-        raw_score_base = trend_score + momentum_score + volume_score + strength_score + volatility_score
+        raw_score_base = (trend_score + momentum_score + volume_score +
+                           strength_score + volatility_score + flow_score)
 
         # AUDIT FIX: sector_bonus diterapkan ke RAW score (bukan final_score
         # yang sudah dikalikan regime_weight). Sebelumnya bonus diterapkan
@@ -992,6 +1282,7 @@ def analyze_stock(
             volume_score=round(volume_score, 1),
             strength_score=round(strength_score, 1),
             volatility_score=round(volatility_score, 1),
+            flow_score=round(flow_score, 1),
             raw_score=round(raw_score, 1),
             sector_bonus=round(sector_bonus, 1),
             regime_weight=regime_weight,

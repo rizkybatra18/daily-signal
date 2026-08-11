@@ -2,6 +2,172 @@
 
 ---
 
+## v2.5.1 — Audit Menyeluruh Hulu-ke-Hilir (2026-08)
+
+### 🔍 Latar belakang
+Audit penuh atas permintaan user: baca ulang SELURUH sistem dari data
+ingestion sampai dashboard, cari bug/perhitungan salah, perbaiki
+langsung. Ditemukan 6 masalah nyata (2 berdampak signifikan, 4 pola
+berulang) — semua sudah diuji dengan smoke test, bukan cuma dibaca.
+
+### 🐛 Bug signifikan
+1. **`_upsert_with_schema_fallback()` di `database.py` — retry loop
+   cuma sanggup buang 1 kolom bermasalah** (`for _ in range(2)`). Kalau
+   lebih dari 1 kolom baru belum ada di schema sekaligus (persis situasi
+   sekarang: migration 005 & 006 sama-sama belum jalan = 8 kolom baru
+   sekaligus), `save_signal()` gagal TOTAL — bukan cuma skip kolom yang
+   belum ada. **Berpotensi bikin scan harian gagal simpan APAPUN** kalau
+   migration tidak lengkap dijalankan. Diperbaiki: jumlah percobaan
+   mengikuti jumlah kolom di payload, bukan angka tetap. Dibuktikan
+   dengan unit test tiruan (3 kolom hilang sekaligus, tetap berhasil).
+2. **Backtest `_simulate_trade()` tidak pernah simulasikan TP2** —
+   cuma cek TP1/SL, padahal `settings.atr_tp2_multiplier` ada dan
+   dipakai live tracking (`signal_evaluator.py::_walk_price_path`,
+   urutan SL->TP2->TP1). Backtest jadi menguji strategi single-target
+   yang beda dari yang dilacak live. Diperbaiki: tp2 dihitung, urutan
+   cek disamakan persis. Dibuktikan: skenario gap-up sintetis sekarang
+   benar keluar sebagai TP2, bukan berhenti di TP1.
+
+### 🔁 Pola berulang: cap score hardcoded basi (ketemu di 5 lokasi terpisah)
+Setelah trend_score cap berubah 2x (30→20→22) & volatility 2x (10→4→2)
+dalam sesi-sesi sebelumnya, ditemukan **5 lokasi berbeda** yang masih
+menyalin angka cap lama secara manual alih-alih pakai konstanta:
+`compute_confidence()` (basi SEBELUM sesi manapun — strength_score
+ditulis 15 padahal sudah 21), `telegram/bot.py` (threshold 16, harusnya
+ikut naik ke 17.6 pas trend cap naik ke 22), `dashboard.py` 3 lokasi
+terpisah (reason-builder, gauge "Score Breakdown", tile "Trend/
+Volatility Score" di Signal Detail). **Diperbaiki permanen di SEMUA
+lokasi**: import `TREND_SCORE_CAP` dkk dari `ta_engine.py` langsung,
+tidak ada lagi angka cap yang disalin manual di tempat lain manapun.
+
+### 🔧 Konsistensi hulu-hilir
+- `signal_evaluator.py::capture_todays_signals()` menghitung ULANG
+  `trend_structure` secara independen dari yang dipakai live scoring
+  (`_score_trend`), padahal nilainya sudah tersimpan di `sig.get(
+  "trend_structure")` sejak migration 006. Diperbaiki: reuse nilai yang
+  sudah ada, recompute cuma sebagai fallback data lama.
+- `pattern_engine.py`: docstring modul masih bilang trend_structure
+  "belum di-wire ke scoring" — sudah basi sejak trend_structure
+  diintegrasikan ke `_score_trend()`. Diperbaiki, sekaligus diperjelas
+  pattern LAIN (candlestick/breakout/S-R/divergence) memang masih belum
+  di-wire (itu tetap benar).
+- `backtest/engine.py`: docstring modul masih sebut bobot statis lama
+  (30/25/20/21/4) yang sudah 2x berubah. Diperbaiki — sekarang menunjuk
+  ke `CompositeScore` di `ta_engine.py` sebagai sumber kebenaran,
+  bukan angka yang bisa basi lagi.
+
+### ✅ Area yang dicek, tidak ada masalah ditemukan
+`scanner.py` (orkestrasi pipeline), `regime_engine.py`, `sector_engine.py`,
+`market_data.py` (fetch & incremental update), `portfolio/tracker.py`
+(fitur tersembunyi dari UI, komisi konsisten dengan backtest), migration
+SQL, `_calc_metrics` (tidak terpengaruh perubahan TradeResult karena
+cuma pakai `win`/`net_pnl_pct`, bukan `exit_reason` string).
+
+---
+
+## v2.5.0 — Flow Indicators, Trend Structure Scoring & Backtest Parity (2026-08)
+
+### 🎯 Latar belakang
+Skip fitur broker summary berbayar (lihat v2.4.0 di bawah, provider belum
+ada) — fokus dialihkan ke 2 hal yang bisa dikerjakan GRATIS & langsung
+berdasarkan data: (1) proxy bandarmology dari OHLCV yang sudah ada, (2)
+perbaikan scoring berdasarkan analisis signal_results yang terus membesar
+(n=265 → n=368, update 10 Agu 2026) dan audit ulang seluruh cap komponen.
+
+### ✨ Flow Indicators (BARU) — proxy bandarmology gratis
+- 5 indikator baru murni dari OHLCV (`src/signals/ta_engine.py`): OBV
+  (Granville), A/D Line + Chaikin Money Flow (Marc Chaikin), Money Flow
+  Index, klasifikasi bar ala Volume Spread Analysis (Tom Williams/Wyckoff:
+  ACCUMULATION/DISTRIBUTION/CLIMAX_UP/CLIMAX_DOWN/NO_DEMAND/NEUTRAL).
+- `flow_score` BARU (0-10 poin) sebagai komponen ke-6 composite score.
+  BELUM ada validasi empiris (indikator baru) — bobot sengaja kecil,
+  cek berkala lewat dashboard Score Calibration begitu data live terisi.
+
+### 📊 Audit & Rebalancing Composite Score (n=368, 27 Jul–10 Agu 2026)
+Re-analisis signal_results dengan Spearman correlation formal (bukan cuma
+kuartil manual) terhadap `net_return_pct`:
+
+| Komponen | rho | p-value | Aksi |
+|---|---|---|---|
+| `volatility_score` | **-0.420** | <0.0001 | Cap dipotong LAGI: 4 → **2** (riwayat: 10→4→2, korelasi stabil -0.50→-0.45→-0.42 di 3 sample — pola nyata, bukan noise) |
+| `trend_score` | -0.217 | <0.0001 | Konfirmasi cap 20 sudah tepat dipotong sesi sebelumnya (dari 30) |
+| `trend_structure` (Pullback vs Breakout) | — | — | Gap ~5pp mean return (Pullback +8.9% n=95 vs Breakout +4.0% n=23) — **BARU dijadikan bagian scoring** (sebelumnya cuma label deskriptif), +2 poin bonus di `_score_trend`, cap trend naik 20→**22** |
+| `momentum_score` | +0.173 | 0.0008 | Sudah benar arahnya, tidak diubah |
+| `strength_score` | +0.136 | 0.0087 | Sudah benar arahnya, tidak diubah |
+| `volume_score` | -0.057 | 0.278 (**tidak signifikan**) | **TIDAK diubah** — bukti belum cukup kuat, konsisten prinsip "jangan ubah tanpa validasi" |
+
+Cap final: trend 22, momentum 25, volume 20, strength 21, volatility 2,
+flow 10 = tetap 100. 2 poin yang dipotong dari volatility dipindah ke
+trend (structure bonus) — bukan redistribusi acak, ada jejak audit jelas.
+
+### 🐛 Bug ditemukan & diperbaiki sekalian
+- **`compute_confidence()` pakai cap BASI** — `strength_score` ditulis
+  hardcoded 15.0 padahal cap sebenarnya sudah 21 sejak audit DI-quality
+  sebelumnya (bug ini SUDAH ADA sebelum sesi ini, ketemu tidak sengaja
+  saat menambahkan konstanta cap). Akibatnya `strong_dims` dihitung dari
+  rasio yang salah, systematically undercount.
+- 4 titik hardcoded threshold/cap trend_score (`telegram/bot.py`,
+  `dashboard.py` 3 titik) yang ketinggalan tiap kali cap trend_score
+  berubah — pola bug yang SAMA berulang. **Diperbaiki permanen**: semua
+  cap sekarang konstanta bernama di `ta_engine.py`
+  (`TREND_SCORE_CAP`, `MOMENTUM_SCORE_CAP`, `VOLUME_SCORE_CAP`,
+  `STRENGTH_SCORE_CAP`, `VOLATILITY_SCORE_CAP`, `FLOW_SCORE_CAP`,
+  `TOTAL_SCORE_CAP` dengan `assert ==100` saat modul di-load) — tempat
+  lain WAJIB import, tidak boleh hardcode ulang.
+- Dashboard "Score Calibration": bucket `volatility_score` masih pakai
+  skala 0-10 yang sudah 2x basi. Diperbaiki + ditambah bucket
+  `trend_score` & `flow_score` (baru) untuk validasi ke depan.
+
+### 🔧 Backtest/Live Parity (lanjutan perbaikan v2.3.1 poin 3)
+`_score_row()` di `src/backtest/engine.py` SEBELUMNYA masih duplikat
+manual formula ta_engine.py (rapuh — terbukti: begitu trend_score &
+volatility_score di atas berubah, kalau tidak disentuh manual backtest
+akan diam-diam pakai formula lama). **Diperbaiki secara struktural**:
+`_score_row()` sekarang membangun `StockAnalysis` dari row lalu MEMANGGIL
+LANGSUNG `_score_trend/_score_momentum/_score_volume/_score_strength/
+_score_volatility/_score_flow` dari `ta_engine.py` — bukan menyalin
+formula lagi. `trend_structure` juga dihitung di backtest (window 120-bar
+per baris, no-lookahead-safe) supaya bonus struktur ikut konsisten.
+
+**Dibuktikan, bukan cuma diklaim**: diuji 5 dataset sintetis berbeda
+lewat `analyze_stock()` (live) vs `_score_row()` (backtest) — **0/5
+mismatch**, skor identik sampai 2 desimal termasuk breakdown per
+komponen.
+
+### 🗄️ Migration baru
+- `005_flow_indicators.sql` — kolom flow di `signals` & `signal_results`
+- `006_trend_structure_scoring.sql` — kolom `trend_structure` di `signals`
+  (sebelumnya cuma ada di `signal_results`)
+
+### ⚠️ Belum selesai
+- `flow_score` & bonus `trend_structure` belum ada data historis untuk
+  divalidasi — perlu beberapa minggu live dulu sebelum re-audit lewat
+  Score Calibration
+
+### 🎨 Dashboard — Insight & Visual Baru
+Extend design system yang sudah ada (bukan rebuild) — tambah komponen
+visual + insight baru untuk flow/struktur, TANPA mengubah engine/scoring:
+
+- **Flow Radar (BARU)** di halaman Home — leaderboard 6 saham dengan
+  pola VSA "Akumulasi" + CMF tertinggi hari itu, satu widget yang
+  merangkum flow_score/CMF/VSA/trend_structure jadi satu pandangan
+  sekilas. Kosong dengan pesan jelas kalau belum ada pola terdeteksi.
+- **Badge VSA & chip Trend Structure baru** (`vsa_badge()`,
+  `structure_chip()`) — dipakai di Top Signals (kolom baru "Flow"),
+  Flow Radar, dan Signal Detail. Warna konsisten dengan design token
+  yang sudah ada (var(--strong-buy)/--avoid/--watchlist), bukan palet baru.
+- **Signal Detail** — bagian "Money Flow & Struktur" baru: CMF, MFI,
+  OBV Slope 10D, badge VSA, plus satu baris interpretasi bahasa natural
+  (co. "volume besar terserap tanpa melebarkan range... OBV naik 6.4%
+  dalam 10 hari... struktur trend saat ini: Pullback") — deskriptif,
+  BUKAN rekomendasi beli/jual.
+- **Bug tile label basi diperbaiki lagi**: Trend Score & Volatility
+  Score di Signal Detail masih menampilkan "/20" dan "/4" (cap lama
+  SEBELUM perubahan trend_structure/volatility di atas) — diperbaiki
+  jadi "/22" dan "/2".
+
+---
+
 ## v2.4.0 — Modul Broker Flow / Bandarmology (Kerangka, Belum Aktif) (2026-08)
 
 ### ✨ Fitur Baru: Broker Summary & Broker Flow

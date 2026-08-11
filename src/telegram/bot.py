@@ -233,7 +233,12 @@ def _signal_reasons(analysis) -> list[str]:
 
     reasons = []
     score = getattr(analysis, "score", None)
-    if score and _sf(getattr(score, "trend_score", 0)) >= 24:
+    # Threshold dinamis (TREND_SCORE_CAP × 0.8) -- BUKAN hardcoded lagi.
+    # AUDIT (2026-08): sempat basi 2x berturut (24/30 -> 16/20 -> lupa
+    # diupdate lagi pas cap naik ke 22 gara-gara structure bonus).
+    # Import konstanta langsung, bukan salin angka, biar tidak basi lagi.
+    from src.signals.ta_engine import TREND_SCORE_CAP
+    if score and _sf(getattr(score, "trend_score", 0)) >= TREND_SCORE_CAP * 0.8:
         reasons.append("EMA Bullish Alignment kuat")
     vol = getattr(analysis, "volume", None)
     if vol and getattr(vol, "volume_spike", False):

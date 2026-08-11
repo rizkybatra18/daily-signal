@@ -302,13 +302,27 @@ def _upsert_with_schema_fallback(
     """
     Upsert/insert dengan fallback otomatis jika ada kolom yang belum
     ada di schema Supabase (PGRST204 "column not found in schema cache").
+
+    AUDIT (2026-08, ditemukan saat audit menyeluruh): retry loop
+    SEBELUMNYA `for _ in range(2)` -- cuma sanggup membuang SATU kolom
+    bermasalah sebelum menyerah. Kalau lebih dari 1 kolom baru belum
+    ada di schema sekaligus (co. migration 005 DAN 006 sama-sama belum
+    dijalankan -- persis situasi setelah rilis flow indicators +
+    trend_structure bersamaan), upsert GAGAL TOTAL (return False, tidak
+    ada sinyal tersimpan sama sekali hari itu) padahal harusnya tetap
+    bisa simpan sisa kolom yang valid. Diperbaiki: jumlah percobaan
+    mengikuti JUMLAH KOLOM di payload (bukan angka tetap 2), supaya bisa
+    buang kolom bermasalah satu-per-satu sampai berhasil atau kolom
+    habis. Tidak bisa infinite loop -- tiap retry yang sukses membuang
+    kolom mengecilkan payload secara ketat.
     """
     import re as _re
 
     db = get_db()
     payload = dict(data)
+    max_attempts = len(payload) + 1   # cukup untuk buang SEMUA kolom kalau perlu
 
-    for _ in range(2):
+    for _ in range(max_attempts):
         try:
             if on_conflict:
                 res = db.table(table).upsert(payload, on_conflict=on_conflict).execute()

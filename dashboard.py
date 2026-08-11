@@ -208,6 +208,35 @@ div[data-testid="metric-container"] div[data-testid="stMetricValue"]{
 hr{ border-color: var(--border) !important; }
 .ds-hr{ height:1px; background:var(--border); margin:14px 0; border:none; }
 
+/* ── Flow / VSA badges (BARU, v2.5.0) ────────────────────────── */
+.ds-flow{ display:inline-flex; align-items:center; gap:5px; padding:3px 10px;
+    border-radius:20px; font-weight:700; font-size:.68rem; letter-spacing:.02em; white-space:nowrap; }
+.ds-flow::before{ content:''; width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.ds-flow-acc{ background: var(--strong-buy-bg); color: var(--strong-buy); }
+.ds-flow-acc::before{ background: var(--strong-buy); }
+.ds-flow-dist{ background: var(--avoid-bg); color: var(--avoid); }
+.ds-flow-dist::before{ background: var(--avoid); }
+.ds-flow-climax{ background: var(--watchlist-bg); color: var(--watchlist); }
+.ds-flow-climax::before{ background: var(--watchlist); }
+.ds-flow-weak{ background: var(--surface-2); color: var(--text-faint); }
+.ds-flow-weak::before{ background: var(--text-faint); }
+.ds-flow-neutral{ background: transparent; color: var(--text-faint); border:1px dashed var(--border); }
+.ds-flow-neutral::before{ display:none; }
+
+/* ── Trend Structure chip (BARU, v2.5.0) ─────────────────────── */
+.ds-struct{ display:inline-block; padding:2px 10px; border-radius:6px; font-size:.71rem; font-weight:600; }
+.ds-struct-good{ background: var(--strong-buy-bg); color: var(--strong-buy); }
+.ds-struct-neutral{ background: var(--surface-2); color: var(--text-dim); }
+.ds-struct-weak{ background: var(--avoid-bg); color: var(--avoid); }
+
+/* ── Flow Radar card (Home, signature widget BARU v2.5.0) ────── */
+.ds-radar-item{ display:flex; align-items:center; gap:12px; padding:11px 16px;
+    border-bottom:1px solid var(--border-soft); }
+.ds-radar-item:last-child{ border-bottom:none; }
+.ds-radar-rank{ width:20px; color:var(--text-faint); font-size:.78rem; font-weight:700; flex-shrink:0; }
+.ds-radar-bar-track{ flex:1; height:6px; background:var(--surface-2); border-radius:3px; overflow:hidden; }
+.ds-radar-bar-fill{ height:100%; border-radius:3px; background:linear-gradient(90deg, var(--strong-buy) 0%, #00e6a8 100%); }
+
 /* Streamlit widget refinement */
 .stDataFrame{ border-radius:12px; overflow:hidden; border:1px solid var(--border); }
 button[kind="secondary"], button[kind="primary"]{ border-radius:9px !important; }
@@ -300,6 +329,36 @@ def gauge_row(label, val, mx, color=None):
         f'</div>'
     )
 
+def vsa_badge(vsa_signal, compact=False):
+    """
+    Badge untuk klasifikasi bar VSA (BARU, v2.5.0) -- lihat
+    ta_engine.py::calc_vsa_signal. compact=True -- versi ringkas
+    (dot + label pendek) untuk baris tabel yang padat.
+    """
+    v = ss(vsa_signal, "")
+    spec = {
+        "ACCUMULATION": ("ds-flow-acc",    "Akumulasi",  "ACC"),
+        "DISTRIBUTION": ("ds-flow-dist",   "Distribusi", "DIST"),
+        "CLIMAX_UP":    ("ds-flow-climax", "Climax ↑",   "CLMX"),
+        "CLIMAX_DOWN":  ("ds-flow-climax", "Climax ↓",   "CLMX"),
+        "NO_DEMAND":    ("ds-flow-weak",   "No Demand",  "WEAK"),
+    }
+    if v not in spec:
+        return '<span class="ds-flow ds-flow-neutral">Netral</span>' if not compact else ""
+    cls, full_label, short_label = spec[v]
+    label = short_label if compact else full_label
+    return f'<span class="ds-flow {cls}">{label}</span>'
+
+def structure_chip(structure):
+    """Chip untuk trend_structure (BARU, v2.5.0) -- warna sesuai bonus di _score_trend."""
+    s = ss(structure, "")
+    if not s:
+        return ""
+    good = {"Pullback", "Higher Low"}
+    weak = {"Lower High", "Lower Low"}
+    cls = "ds-struct-good" if s in good else ("ds-struct-weak" if s in weak else "ds-struct-neutral")
+    return f'<span class="ds-struct {cls}">{s}</span>'
+
 def tile(label, value, delta=None, delta_dir="flat"):
     dcls = {"up":"ds-up","down":"ds-down","flat":"ds-flat"}.get(delta_dir,"ds-flat")
     delta_html = f'<div class="ds-tile-delta {dcls}">{delta}</div>' if delta else ""
@@ -372,6 +431,7 @@ def load_signals_range(days=30):
                 "entry_price,stop_loss,target_1,target_2,risk_reward,rsi,adx,"
                 "volume_ratio,rel_strength,sector,ema20,ema50,ema200,"
                 "trend_score,momentum_score,volume_score,strength_score,volatility_score,"
+                "flow_score,cmf,mfi,vsa_signal,"
                 "raw_score,sector_bonus,confidence")
         r = db.table("signals").select(cols).gte("signal_date", since)\
               .order("signal_date", desc=True).order("raw_score", desc=True).execute()
@@ -707,6 +767,47 @@ def page_home():
             )
         st.markdown(f'<div class="ds-card ds-card-flush">{rows_html}</div>', unsafe_allow_html=True)
 
+    # ── FLOW RADAR (BARU, v2.5.0) ────────────────────────────────
+    # Leaderboard saham dengan pola VSA Akumulasi + CMF positif terkuat
+    # hari ini -- proxy bandarmology gratis (lihat AUDIT flow_score di
+    # ta_engine.py, BELUM tervalidasi empiris, sajikan sebagai info
+    # tambahan bukan sinyal beli berdiri sendiri).
+    section("FLOW RADAR", "🌊")
+    acc_signals = [s for s in signals if ss(s.get("vsa_signal")) == "ACCUMULATION"]
+    acc_signals.sort(key=lambda s: sf(s.get("cmf")), reverse=True)
+    top_flow = acc_signals[:6]
+
+    if not top_flow:
+        st.markdown(
+            '<div class="ds-card">'
+            '<span style="color:#9aa4b8">Belum ada pola akumulasi VSA yang terdeteksi hari ini.</span>'
+            '</div>', unsafe_allow_html=True
+        )
+    else:
+        max_cmf = max(sf(s.get("cmf")) for s in top_flow) or 1.0
+        items_html = ""
+        for i, s in enumerate(top_flow, 1):
+            ticker = ss(s.get("ticker")).replace(".JK", "")
+            cmf = sf(s.get("cmf"))
+            struct = ss(s.get("trend_structure"), "")
+            bar_pct = max(min(cmf / max_cmf * 100, 100), 4)
+            items_html += (
+                f'<div class="ds-radar-item">'
+                f'<div class="ds-radar-rank">#{i}</div>'
+                f'<div style="width:64px;font-weight:700">{ticker}</div>'
+                f'<div class="ds-radar-bar-track"><div class="ds-radar-bar-fill" style="width:{bar_pct:.0f}%"></div></div>'
+                f'<div class="ds-num" style="width:56px;text-align:right;color:#00c896;font-weight:600">{cmf:+.2f}</div>'
+                f'<div style="width:120px;text-align:right">{structure_chip(struct)}</div>'
+                f'</div>'
+            )
+        st.markdown(f'<div class="ds-card ds-card-flush">{items_html}</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="ds-caption" style="margin-top:6px">'
+            'Diranking dari Chaikin Money Flow (CMF) tertinggi di antara saham berpola VSA Akumulasi hari ini. '
+            'Proxy bandarmology gratis dari OHLCV, bukan data transaksi broker asli.</div>',
+            unsafe_allow_html=True
+        )
+
     # ── SYSTEM HEALTH (ringkas) ──────────────────────────────────
     section("SYSTEM HEALTH", "🩺")
     c1, c2, c3, c4 = st.columns(4)
@@ -760,6 +861,7 @@ def page_top_signals():
             "vol": sf(s.get("volume_ratio"), 1.0), "rs": sf(s.get("rel_strength")),
             "entry": entry, "sl": sf(s.get("stop_loss")), "tp1": sf(s.get("target_1")),
             "rr": sf(s.get("risk_reward")), "conf": s.get("confidence"),
+            "vsa": s.get("vsa_signal"),
         })
 
     if not rows:
@@ -768,9 +870,17 @@ def page_top_signals():
     st.markdown(f'<div class="ds-caption">{len(rows)} sinyal ditemukan · {scan_date}</div>', unsafe_allow_html=True)
     st.write("")
 
+    hc = st.columns([0.35, 1.0, 1.4, 1.3, 1.15, 1.3, 0.8, 0.8, 1.0, 1.0, 1.0, 0.7, 0.6])
+    header_labels = ["", "Ticker", "Sinyal", "Confidence", "Flow", "Sektor",
+                      "Volume", "RS", "Entry", "SL", "TP1", "R/R", ""]
+    for col, label in zip(hc, header_labels):
+        if label:
+            col.markdown(f'<span class="ds-tile-label">{label}</span>', unsafe_allow_html=True)
+    st.markdown("<hr class='ds-hr' style='margin:2px 0 8px'>", unsafe_allow_html=True)
+
     for idx, row in enumerate(rows, 1):
         with st.container():
-            c = st.columns([0.4, 1.1, 1.6, 1.6, 1.5, 0.9, 0.9, 1.1, 1.1, 1.1, 0.8, 0.8])
+            c = st.columns([0.35, 1.0, 1.4, 1.3, 1.15, 1.3, 0.8, 0.8, 1.0, 1.0, 1.0, 0.7, 0.6])
             c[0].markdown(f'<span style="color:#5c6478;font-size:.8rem">#{idx}</span>', unsafe_allow_html=True)
             c[1].markdown(f'<span style="font-weight:700">{row["ticker"]}</span>', unsafe_allow_html=True)
             c[2].markdown(signal_badge(row["stype"]), unsafe_allow_html=True)
@@ -778,16 +888,17 @@ def page_top_signals():
                 c[3].markdown(confidence_badge(row["conf"]), unsafe_allow_html=True)
             else:
                 c[3].markdown(f'<span class="ds-chip">score {row["score"]:.0f}</span>', unsafe_allow_html=True)
-            c[4].markdown(f'<span class="ds-chip">{row["sector"][:16]}</span>', unsafe_allow_html=True)
+            c[4].markdown(vsa_badge(row["vsa"], compact=True) or '<span style="color:#5c6478">·</span>', unsafe_allow_html=True)
+            c[5].markdown(f'<span class="ds-chip">{row["sector"][:14]}</span>', unsafe_allow_html=True)
             vc = "#4ade80" if row["vol"]>=1.5 else ("#fbbf24" if row["vol"]>=1 else "#f87171")
-            c[5].markdown(f'<span class="ds-num" style="color:{vc}">{row["vol"]:.1f}x</span>', unsafe_allow_html=True)
+            c[6].markdown(f'<span class="ds-num" style="color:{vc}">{row["vol"]:.1f}x</span>', unsafe_allow_html=True)
             rc = "#4ade80" if row["rs"]>0 else "#f87171"
-            c[6].markdown(f'<span class="ds-num" style="color:{rc}">{row["rs"]:+.1f}%</span>', unsafe_allow_html=True)
-            c[7].markdown(f'<span class="ds-num">Rp{row["entry"]:,.0f}</span>', unsafe_allow_html=True)
-            c[8].markdown(f'<span class="ds-num" style="color:#f87171">Rp{row["sl"]:,.0f}</span>', unsafe_allow_html=True)
-            c[9].markdown(f'<span class="ds-num" style="color:#4ade80">Rp{row["tp1"]:,.0f}</span>', unsafe_allow_html=True)
-            c[10].markdown(f'<span class="ds-num">1:{row["rr"]:.1f}</span>', unsafe_allow_html=True)
-            if c[11].button("→", key=f"d_{row['ticker']}_{idx}", help="Lihat detail"):
+            c[7].markdown(f'<span class="ds-num" style="color:{rc}">{row["rs"]:+.1f}%</span>', unsafe_allow_html=True)
+            c[8].markdown(f'<span class="ds-num">Rp{row["entry"]:,.0f}</span>', unsafe_allow_html=True)
+            c[9].markdown(f'<span class="ds-num" style="color:#f87171">Rp{row["sl"]:,.0f}</span>', unsafe_allow_html=True)
+            c[10].markdown(f'<span class="ds-num" style="color:#4ade80">Rp{row["tp1"]:,.0f}</span>', unsafe_allow_html=True)
+            c[11].markdown(f'<span class="ds-num">1:{row["rr"]:.1f}</span>', unsafe_allow_html=True)
+            if c[12].button("→", key=f"d_{row['ticker']}_{idx}", help="Lihat detail"):
                 st.session_state["sel_ticker"] = row["ticker"]
                 st.session_state["nav_override"] = "detail"
                 st.rerun()
@@ -796,7 +907,7 @@ def page_top_signals():
     export = pd.DataFrame([{
         "Ticker": r["ticker"], "Signal": r["stype"], "Score": r["score"],
         "Sektor": r["sector"], "Harga": r["close"], "Entry": r["entry"],
-        "SL": r["sl"], "TP1": r["tp1"], "R/R": r["rr"],
+        "SL": r["sl"], "TP1": r["tp1"], "R/R": r["rr"], "VSA": ss(r["vsa"], ""),
     } for r in rows])
     st.download_button("⬇ Download CSV", export.to_csv(index=False).encode(),
         file_name=f"daily_signal_{scan_date}.csv", mime="text/csv")
@@ -819,7 +930,12 @@ def _build_reasons(sig: dict) -> list[str]:
 
     reasons = []
     trend_score = sf(sig.get("trend_score"))
-    if trend_score >= 24: reasons.append("EMA Bullish Alignment kuat")
+    # Threshold dinamis (TREND_SCORE_CAP × 0.8) -- BUKAN hardcoded lagi.
+    # AUDIT (2026-08): sempat basi 2x berturut (24/30 -> 16/20 -> lupa
+    # diupdate lagi pas cap naik ke 22 gara-gara structure bonus).
+    # Import konstanta langsung, bukan salin angka, biar tidak basi lagi.
+    from src.signals.ta_engine import TREND_SCORE_CAP
+    if trend_score >= TREND_SCORE_CAP * 0.8: reasons.append("EMA Bullish Alignment kuat")
     vr = sf(sig.get("volume_ratio"), 1.0)
     if vr >= 1.5: reasons.append(f"Volume Spike {vr:.1f}x rata-rata")
     rs = sf(sig.get("rel_strength"))
@@ -883,12 +999,21 @@ def page_signal_detail():
 
     # ── Score Breakdown ──────────────────────────────────────────
     section("SCORE BREAKDOWN", "📊")
+    # AUDIT (2026-08): ini tempat KE-4 yang ketemu masih hardcode cap lama
+    # (Trend 20 harusnya 22, Volatility 4 harusnya 2) dalam audit menyeluruh
+    # yang sama -- pola berulang. Import konstanta langsung, bukan salin
+    # angka lagi, supaya tidak basi lagi kalau cap berubah ke depannya.
+    from src.signals.ta_engine import (
+        TREND_SCORE_CAP, MOMENTUM_SCORE_CAP, VOLUME_SCORE_CAP,
+        STRENGTH_SCORE_CAP, VOLATILITY_SCORE_CAP, FLOW_SCORE_CAP,
+    )
     comps = [
-        ("Trend",      sf(sig.get("trend_score")),      30),
-        ("Momentum",   sf(sig.get("momentum_score")),   25),
-        ("Volume",     sf(sig.get("volume_score")),     20),
-        ("Strength",   sf(sig.get("strength_score")),   21),
-        ("Volatility", sf(sig.get("volatility_score")),  4),
+        ("Trend",      sf(sig.get("trend_score")),      TREND_SCORE_CAP),
+        ("Momentum",   sf(sig.get("momentum_score")),   MOMENTUM_SCORE_CAP),
+        ("Volume",     sf(sig.get("volume_score")),     VOLUME_SCORE_CAP),
+        ("Strength",   sf(sig.get("strength_score")),   STRENGTH_SCORE_CAP),
+        ("Volatility", sf(sig.get("volatility_score")), VOLATILITY_SCORE_CAP),
+        ("Flow",       sf(sig.get("flow_score")),       FLOW_SCORE_CAP),
     ]
     sector_bonus = sig.get("sector_bonus")
 
@@ -1323,12 +1448,22 @@ def page_signal_performance():
             st.caption("Deteksi HEURISTIK, bukan machine learning -- lihat docstring pattern_engine.py.")
 
         with tab_d:
-            sc1, sc2, sc3, sc4, sc5 = st.columns(5)
-            with sc1: st.markdown(tile("Trend Score", f"{sf(g('trend_score')):.1f}/30"), unsafe_allow_html=True)
-            with sc2: st.markdown(tile("Momentum Score", f"{sf(g('momentum_score')):.1f}/25"), unsafe_allow_html=True)
-            with sc3: st.markdown(tile("Volume Score", f"{sf(g('volume_score')):.1f}/20"), unsafe_allow_html=True)
-            with sc4: st.markdown(tile("Strength Score", f"{sf(g('strength_score')):.1f}/21"), unsafe_allow_html=True)
-            with sc5: st.markdown(tile("Volatility Score", f"{sf(g('volatility_score')):.1f}/4"), unsafe_allow_html=True)
+            # AUDIT (2026-08): tempat KE-5 dengan cap hardcoded yang ketemu
+            # basi dalam audit menyeluruh yang sama -- pola berulang cukup
+            # sering sampai perlu ditutup permanen di SEMUA lokasi sekaligus.
+            # Import konstanta, jangan hardcode angka cap lagi di manapun.
+            from src.signals.ta_engine import (
+                TREND_SCORE_CAP, MOMENTUM_SCORE_CAP, VOLUME_SCORE_CAP,
+                STRENGTH_SCORE_CAP, VOLATILITY_SCORE_CAP, FLOW_SCORE_CAP,
+            )
+            sc1, sc2, sc3, sc4, sc5, sc6b = st.columns(6)
+            with sc1: st.markdown(tile("Trend Score", f"{sf(g('trend_score')):.1f}/{TREND_SCORE_CAP:.0f}"), unsafe_allow_html=True)
+            with sc2: st.markdown(tile("Momentum Score", f"{sf(g('momentum_score')):.1f}/{MOMENTUM_SCORE_CAP:.0f}"), unsafe_allow_html=True)
+            with sc3: st.markdown(tile("Volume Score", f"{sf(g('volume_score')):.1f}/{VOLUME_SCORE_CAP:.0f}"), unsafe_allow_html=True)
+            with sc4: st.markdown(tile("Strength Score", f"{sf(g('strength_score')):.1f}/{STRENGTH_SCORE_CAP:.0f}"), unsafe_allow_html=True)
+            with sc5: st.markdown(tile("Volatility Score", f"{sf(g('volatility_score')):.1f}/{VOLATILITY_SCORE_CAP:.0f}"), unsafe_allow_html=True)
+            with sc6b: st.markdown(tile("Flow Score", f"{sf(g('flow_score')):.1f}/{FLOW_SCORE_CAP:.0f}"), unsafe_allow_html=True)
+            st.caption("Flow Score: proxy bandarmology gratis (OBV/CMF/MFI/VSA) — BARU, belum tervalidasi empiris.")
             st.markdown("")
             sc6, sc7, sc8, sc9, sc10 = st.columns(5)
             with sc6: st.markdown(tile("Sector Bonus", f"{sf(g('sector_bonus')):+.1f}"), unsafe_allow_html=True)
@@ -1340,6 +1475,54 @@ def page_signal_performance():
                 "Raw Score = yang benar-benar dipakai klasifikasi signal_type. Final Score = "
                 "raw x regime_weight, nilai tampilan saja -- lihat CHANGELOG v2.2.0."
             )
+
+            # ── Flow & Structure narrative (BARU, v2.5.0) ────────
+            cmf_val = g("cmf")
+            if cmf_val is not None:
+                st.markdown("")
+                section("MONEY FLOW & STRUKTUR", "🌊")
+                vsa_sig = ss(g("vsa_signal"), "")
+                structure = ss(g("trend_structure"), "")
+                mfi_val = sf(g("mfi"), 50)
+                obv_slope = sf(g("obv_slope_pct"))
+
+                fc1, fc2, fc3, fc4 = st.columns(4)
+                with fc1: st.markdown(tile("CMF (Chaikin Money Flow)", f"{sf(cmf_val):+.3f}"), unsafe_allow_html=True)
+                with fc2: st.markdown(tile("MFI (Money Flow Index)", f"{mfi_val:.0f}"), unsafe_allow_html=True)
+                with fc3: st.markdown(tile("OBV Slope (10D)", f"{obv_slope:+.1f}%"), unsafe_allow_html=True)
+                with fc4:
+                    st.markdown('<div class="ds-tile"><div class="ds-tile-label">VSA Signal</div>'
+                                f'<div style="margin-top:4px">{vsa_badge(vsa_sig)}</div></div>', unsafe_allow_html=True)
+
+                # Interpretasi bahasa natural -- BUKAN rekomendasi beli/jual,
+                # murni deskripsi apa yang indikator tunjukkan.
+                interp_parts = []
+                if vsa_sig == "ACCUMULATION":
+                    interp_parts.append("volume besar terserap tanpa melebarkan range harga (indikasi akumulasi)")
+                elif vsa_sig == "DISTRIBUTION":
+                    interp_parts.append("volume besar terserap dengan close melemah (indikasi distribusi)")
+                elif vsa_sig == "NO_DEMAND":
+                    interp_parts.append("kenaikan harga TIDAK didukung volume (rally lemah)")
+                elif vsa_sig in ("CLIMAX_UP", "CLIMAX_DOWN"):
+                    interp_parts.append("volume & range ekstrem (potensi exhaustion, waspada pembalikan)")
+                if obv_slope > 5:
+                    interp_parts.append(f"OBV naik {obv_slope:.1f}% dalam 10 hari terakhir")
+                elif obv_slope < -5:
+                    interp_parts.append(f"OBV turun {abs(obv_slope):.1f}% dalam 10 hari terakhir")
+                if structure:
+                    interp_parts.append(f'struktur trend saat ini: "{structure}"')
+
+                if interp_parts:
+                    st.markdown(
+                        f'<div class="ds-card" style="border-left:3px solid var(--accent)">'
+                        f'<span style="color:#9aa4b8;font-size:.85rem">'
+                        f'{"; ".join(interp_parts).capitalize()}.</span></div>',
+                        unsafe_allow_html=True
+                    )
+                st.caption(
+                    "Flow & struktur adalah proxy bandarmology gratis dari OHLCV (bukan data broker asli) "
+                    "dan trend_structure — keduanya BARU, belum ada validasi empiris jangka panjang."
+                )
 
         with tab_e:
             reasons = g("reasons")
@@ -1375,9 +1558,18 @@ def page_signal_performance():
     if len(closed_df) < 10:
         st.info("Butuh minimal ~10 sinyal CLOSED untuk kalibrasi yang bermakna.")
     else:
+        # CATATAN (2026-08): bucket trend_score/volatility_score di bawah
+        # mengikuti cap TERBARU (22 & 2, lihat AUDIT CompositeScore di
+        # ta_engine.py) -- kalau cap berubah lagi nanti, bucket di sini
+        # JUGA WAJIB disesuaikan manual (beda modul/bahasa dari Python,
+        # belum ada cara auto-sync ke TREND_SCORE_CAP dkk). flow_score
+        # BARU, belum ada histori signal_results lama untuk divalidasi --
+        # baru mulai terisi dari sinyal setelah deploy perubahan ini.
         calib_specs = [
             ("raw_score",        [0, 45, 60, 75, 100],      ["<45", "45-59", "60-74", "75+"]),
-            ("volatility_score", [-1, 4, 7, 10],             ["0-4 (rendah)", "4-7 (sedang)", "7-10 (tinggi)"]),
+            ("trend_score",      [-1, 8, 14, 18, 22],       ["0-8", "8-14", "14-18", "18-22"]),
+            ("volatility_score", [-1, 0.5, 1, 1.5, 2],      ["0-0.5 (rendah)", "0.5-1", "1-1.5", "1.5-2 (tinggi)"]),
+            ("flow_score",       [-1, 2, 5, 8, 10],         ["0-2", "2-5", "5-8", "8-10"]),
             ("minus_di",         [0, 10, 15, 20, 100],       ["<10", "10-14", "15-19", "20+"]),
             ("adx",              [0, 20, 25, 30, 40, 100],   ["<20", "20-24", "25-29", "30-39", "40+"]),
         ]

@@ -1,23 +1,30 @@
 """
 DAILY SIGNAL — Pattern & Trend Structure Detection Engine
 Modul BERDIRI SENDIRI (fungsi murni, tidak menyentuh ta_engine.py /
-scanner.py), dipanggil dari signal_evaluator.py::capture_todays_signals()
-untuk mengisi kolom `trend_structure` dan `pattern_detected` yang
-sebelumnya RESERVED/selalu NULL (lihat AUDIT note lama di
-signal_evaluator.py).
+scanner.py secara langsung — dipanggil DARI ta_engine.py &
+signal_evaluator.py, bukan sebaliknya), dipanggil untuk mengisi kolom
+`trend_structure` dan `pattern_detected`.
 
 ═══════════════════════════════════════════════════════════════════
 KETERBATASAN YANG DIAKUI JUJUR (baca sebelum pakai hasilnya):
 ═══════════════════════════════════════════════════════════════════
 Semua deteksi di sini HEURISTIK berbasis aturan sederhana (swing pivot,
-rasio body/wick candle, RSI vs harga) — BUKAN machine learning, BUKAN
-klaim akurasi tervalidasi. Belum ada backtest khusus yang mengukur
-"seberapa sering pattern X yang terdeteksi di sini benar-benar diikuti
-pergerakan yang diharapkan". Perlakukan sebagai KONTEKS TAMBAHAN untuk
-dibaca manusia (lewat dashboard/reasons), bukan sebagai input scoring
-otomatis — belum di-wire ke _score_*() manapun di ta_engine.py, dan
-sebaiknya jangan di-wire sebelum divalidasi empiris seperti
-volatility_score/minus_di di CHANGELOG v2.2.0.
+rasio body/wick candle, RSI vs harga) — BUKAN machine learning.
+
+STATUS WIRING KE SCORING (v2.5.0, 2026-08 — CATATAN INI PERNAH BASI,
+lihat AUDIT trend_score di ta_engine.py::CompositeScore untuk riwayat
+lengkap kenapa berubah):
+  - `detect_trend_structure()` SUDAH di-wire ke _score_trend() di
+    ta_engine.py (bonus ±2 poin) sejak evidence signal_results n=368
+    menunjukkan gap besar & konsisten (Pullback +8.9% vs Breakout
+    +4.0%) — BUKAN lagi sekadar konteks deskriptif.
+  - Fungsi LAIN di modul ini (`detect_candlestick_patterns`,
+    `detect_breakout_pattern`, `detect_support_resistance`,
+    `detect_divergence`, dan `detect_all_patterns` secara umum) BELUM
+    di-wire ke _score_*() manapun — masih murni konteks tambahan untuk
+    dibaca manusia (lewat dashboard/reasons), belum divalidasi empiris.
+    Jangan wire sebelum ada validasi seperti yang dilakukan untuk
+    volatility_score/minus_di/trend_structure di atas.
 """
 
 from typing import Optional

@@ -22,12 +22,31 @@ TAPI ditemukan 3 masalah REALISME EKSEKUSI yang sudah diperbaiki:
   3. SCORING BACKTEST BEDA DENGAN SCORING LIVE — versi lama memakai
      skala 0-60 dengan bobot berbeda dari composite scoring live
      (0-100). Akibatnya backtest sebenarnya memvalidasi strategi yang
-     BERBEDA dari yang benar-benar dipakai live. Diperbaiki: _score_row()
-     kini meniru persis pita nilai _score_trend/_score_momentum/
-     _score_volume/_score_strength/_score_volatility di ta_engine.py
-     (total tetap 0-100, bobot terkini 30/25/20/21/4 -- lihat AUDIT
-     note di _score_strength/_score_volatility ta_engine.py soal kenapa
-     15/10 berubah jadi 21/4).
+     BERBEDA dari yang benar-benar dipakai live. Diperbaiki (poin 3,
+     LALU disempurnakan lagi di poin 4 di bawah — bobot terkini lihat
+     CompositeScore di ta_engine.py, BUKAN angka statis di sini, karena
+     sudah 2x berubah sejak poin ini ditulis).
+
+  4. [v2, 2026-08] "MENIRU PERSIS" DI POIN 3 MASIH RAPUH — perbaikan
+     poin 3 di atas MASIH berupa duplikat manual (_score_row() menyalin
+     ulang formula ta_engine.py sebagai kode terpisah). Terbukti rapuh:
+     begitu trend_score dipotong 30->20 & flow_score baru ditambahkan
+     di ta_engine.py (lihat AUDIT CompositeScore), _score_row() di sini
+     TIDAK ikut berubah kalau tidak disentuh manual -- persis skenario
+     yang bikin poin 3 perlu diperbaiki dari awal. Diperbaiki BENAR
+     kali ini: _score_row() sekarang membangun StockAnalysis dari row
+     lalu MEMANGGIL LANGSUNG _score_trend/_score_momentum/_score_volume/
+     _score_strength/_score_volatility/_score_flow dari ta_engine.py --
+     bukan menyalin formulanya lagi. Konsekuensinya: kalau ta_engine.py
+     berubah lagi nanti, backtest OTOMATIS ikut berubah, tidak perlu
+     diingat-ingat untuk disinkronkan manual.
+
+  5. [v2.5.0, 2026-08] TP2 TIDAK PERNAH DISIMULASIKAN — _simulate_trade()
+     SEBELUMNYA cuma cek TP1 & SL, padahal settings.atr_tp2_multiplier
+     ADA dan DIPAKAI live tracking (signal_evaluator.py::_walk_price_path,
+     urutan SL->TP2->TP1). Backtest jadi menguji strategi single-target
+     (exit penuh di TP1) yang beda dari yang dilacak live. Diperbaiki:
+     tp2 dihitung & urutan cek disamakan persis dengan _walk_price_path.
 
 Metrik output:
     Win Rate, Profit Factor, Expectancy, Sharpe, Sortino,
@@ -45,7 +64,12 @@ from src.core.logger import get_logger
 from src.core.database import get_db
 from src.signals.ta_engine import (
     calc_rsi, calc_ema, calc_macd, calc_atr, calc_adx, calc_bollinger,
-    calc_mansfield_rs,
+    calc_mansfield_rs, calc_obv, calc_obv_slope_pct, calc_ad_line, calc_cmf,
+    calc_mfi, calc_vsa_signal, _safe_detect_trend_structure,
+    StockAnalysis, TrendIndicators, MomentumIndicators, StrengthIndicators,
+    VolumeIndicators, VolatilityIndicators, FlowIndicators,
+    _score_trend, _score_momentum, _score_volume, _score_strength,
+    _score_volatility, _score_flow,
 )
 
 log = get_logger("backtest")
@@ -65,9 +89,10 @@ class TradeResult:
     exit_price: float
     atr: float
     tp1: float
+    tp2: float              # BARU -- lihat AUDIT parity TP2 di _simulate_trade
     sl: float
     win: bool
-    exit_reason: str       # TP1/SL/TIMEOUT/INVALID/NO_NEXT_BAR
+    exit_reason: str       # TP1/TP2/SL/TIMEOUT/INVALID/NO_NEXT_BAR
     exit_candle: int
     gross_pnl_pct: float
     net_pnl_pct: float     # Setelah komisi
@@ -166,200 +191,130 @@ def _add_indicators(df: pd.DataFrame, ihsg_close: Optional[pd.Series] = None) ->
     df["bb_width"] = (bb_range / bb_mid.replace(0, np.nan)).fillna(1.0)
     df["bb_squeeze"] = df["bb_width"] < 0.05
 
+    # Flow (BARU) -- pakai fungsi ASLI dari ta_engine.py (bukan reimplement)
+    # supaya definisinya dijamin sama persis dengan live, sama seperti
+    # indikator lain di atas.
+    df["obv"] = calc_obv(close, volume)
+    df["obv_slope_pct"] = calc_obv_slope_pct(df["obv"], period=10)
+    df["ad_line"] = calc_ad_line(df)
+    df["cmf"] = calc_cmf(df, period=20)
+    df["mfi"] = calc_mfi(df, period=14)
+    df["vsa_signal"] = calc_vsa_signal(df, period=20)
+
+    # Trend Structure (v2.5.0) -- dari pattern_engine.py, SAMA PERSIS
+    # dengan yang dipakai live (_safe_detect_trend_structure). TIDAK
+    # bisa divectorize (perlu deteksi swing-pivot ulang tiap titik
+    # waktu), jadi dihitung per-baris dengan window 120 bar TERAKHIR
+    # s.d. baris itu saja (bukan seluruh df) -- window terbatas supaya
+    # PASTI TIDAK ADA LOOKAHEAD (prinsip inti sistem ini, lihat AUDIT
+    # no-lookahead di CHANGELOG) sekaligus tetap murah dihitung untuk
+    # backtest ribuan baris. 120 = 2x lookback default detect_trend_
+    # structure (60) + buffer untuk pivot_window.
+    structures = [None] * len(df)
+    for i in range(len(df)):
+        window = df.iloc[max(0, i - 119):i + 1]
+        structures[i] = _safe_detect_trend_structure(window)
+    df["trend_structure"] = structures
+
     return df.dropna(subset=["rsi", "ema20", "atr"])
 
 
 def _score_row(row: pd.Series) -> tuple[float, int]:
     """
-    Hitung composite score untuk satu baris (satu hari) — SKALA 0-100,
-    meniru persis pita nilai di ta_engine.py (_score_trend dkk) agar
-    backtest ini benar-benar menguji strategi yang sama dengan yang
-    live berjalan (lihat AUDIT NOTE di atas modul ini).
+    Hitung composite score untuk satu baris (satu hari) — SKALA 0-100.
+
+    [v2, 2026-08] TIDAK LAGI duplikat formula manual (lihat AUDIT NOTE
+    poin 4 di atas modul ini). Fungsi ini membangun StockAnalysis dari
+    kolom row (hasil _add_indicators, semua backward-looking) lalu
+    MEMANGGIL LANGSUNG _score_trend/_score_momentum/_score_volume/
+    _score_strength/_score_volatility/_score_flow dari ta_engine.py --
+    sumber tunggal kebenaran (single source of truth) untuk kedua
+    live scanner dan backtest.
 
     Return: (score 0-100, conditions_met) — signature TIDAK berubah
     dari versi sebelumnya (dipakai test_backtest_no_lookahead).
+    conditions_met adalah bookkeeping KHUSUS BACKTEST (bukan bagian
+    dari scoring live) -- hitung kasar berapa "kondisi kuat" terpenuhi,
+    dipakai untuk kolom conditions_met di TradeResult saja.
     """
-    close = row.get("close", 0)
-    conditions = 0
-
-    # ── Trend (0-30) ──────────────────────────────────────────────
+    close = row.get("close", 0) or 0
     ema20 = row.get("ema20", 0) or 0
     ema50 = row.get("ema50", 0) or 0
     ema200 = row.get("ema200", 0) or 0
-    trend_score = 0.0
+    price_vs_ema20 = ((close / ema20) - 1) * 100 if ema20 > 0 else 0
 
-    if close > ema20 > ema50 > ema200 > 0:
-        trend_score += 12
-        conditions += 1
-    elif close > ema20 > ema50 > 0:
-        trend_score += 8
-        conditions += 1
-    elif close > ema20 > 0:
-        trend_score += 4
-
-    if ema20 > 0:
-        gap_pct = (close - ema20) / ema20 * 100
-        if 0 < gap_pct <= 5:
-            trend_score += 8
-        elif 5 < gap_pct <= 10:
-            trend_score += 5
-        elif gap_pct > 10:
-            trend_score += 2
-        elif -2 < gap_pct <= 0:
-            trend_score += 3
-
-    if ema50 > ema200 > 0:
-        trend_score += 6
-        conditions += 1
-    elif ema50 > 0 and ema200 > 0 and ema50 > ema200 * 0.98:
-        trend_score += 3
-
-    if ema20 > 0:
-        price_vs_ema20 = (close / ema20 - 1) * 100
-        if price_vs_ema20 > 1:
-            trend_score += 4
-        elif price_vs_ema20 > 0:
-            trend_score += 2
-
-    trend_score = min(trend_score, 30.0)
-
-    # ── Momentum (0-25) ───────────────────────────────────────────
-    rsi = row.get("rsi", 50) or 50
-    rsi_prev = row.get("rsi_prev", rsi) or rsi
-    macd_hist = row.get("macd_hist", 0) or 0
-    macd_hist_prev = row.get("macd_hist_prev", 0) or 0
-    macd_line = row.get("macd_line", 0) or 0
-    macd_signal = row.get("macd_signal", 0) or 0
-    macd_cross = row.get("macd_cross", "NONE")
-    momentum_score = 0.0
-
-    if 40 <= rsi <= 60:
-        momentum_score += 12
-        conditions += 1
-    elif 30 <= rsi < 40:
-        momentum_score += 10
-        conditions += 1
-    elif 60 < rsi <= 65:
-        momentum_score += 8
-    elif 65 < rsi <= 70:
-        momentum_score += 5
-    elif rsi < 30:
-        momentum_score += 6
-    elif rsi > 70:
-        momentum_score += 2
-
-    if rsi > rsi_prev and rsi < 70:
-        momentum_score += 2
-
-    if macd_hist > 0:
-        momentum_score += 8
-        conditions += 1
-        if macd_hist > macd_hist_prev:
-            momentum_score += 2
-    elif macd_hist > -0.001:
-        momentum_score += 4
-
-    if macd_cross == "GOLDEN":
-        momentum_score += 5
-    elif macd_line > macd_signal:
-        momentum_score += 3
-
-    momentum_score = min(momentum_score, 25.0)
-
-    # ── Volume (0-20) ─────────────────────────────────────────────
     vol_ma20 = row.get("vol_ma20", 0) or 0
     vol = row.get("volume", 0) or 0
-    volume_trend = row.get("volume_trend", "NORMAL")
-    volume_score = 0.0
-    ratio = (vol / vol_ma20) if vol_ma20 > 0 else 1.0
+    volume_ratio = (vol / vol_ma20) if vol_ma20 > 0 else 1.0
 
-    if ratio >= 2.0:
-        volume_score += 15
-        conditions += 1
-    elif ratio >= 1.5:
-        volume_score += 10
-        conditions += 1
-    elif ratio >= 1.2:
-        volume_score += 7
-    elif ratio >= 1.0:
-        volume_score += 4
-    elif ratio >= 0.7:
-        volume_score += 2
-
-    if volume_trend == "SURGE":
-        volume_score += 5
-    elif volume_trend == "INCREASING":
-        volume_score += 3
-
-    volume_score = min(volume_score, 20.0)
-
-    # ── Strength (0-21) ───────────────────────────────────────────
-    # AUDIT (selaras ta_engine.py::_score_strength, n=63 -> re-validasi
-    # n=140, 27 Jul-4 Aug 2026): DI quality ditambahkan, cap naik 15->21.
-    adx = row.get("adx", 0) or 0
     plus_di = row.get("plus_di", 0) or 0
     minus_di = row.get("minus_di", 0) or 0
-    rel_strength = row.get("rel_strength", 0) or 0
-    strength_score = 0.0
+    adx = row.get("adx", 0) or 0
 
-    if adx >= 40:
-        adx_pts = 8.0
-    elif adx >= 30:
-        adx_pts = 6.0
-    elif adx >= 25:
-        adx_pts = 4.0
-    elif adx >= 20:
-        adx_pts = 2.0
-    else:
-        adx_pts = 0.0
+    analysis = StockAnalysis(
+        trend=TrendIndicators(
+            ema20=ema20, ema50=ema50, ema200=ema200,
+            price_vs_ema20=price_vs_ema20,
+            structure=row.get("trend_structure"),
+        ),
+        momentum=MomentumIndicators(
+            rsi=row.get("rsi", 50) or 50,
+            rsi_prev=row.get("rsi_prev", 50) or 50,
+            macd_line=row.get("macd_line", 0) or 0,
+            macd_signal=row.get("macd_signal", 0) or 0,
+            macd_hist=row.get("macd_hist", 0) or 0,
+            macd_hist_prev=row.get("macd_hist_prev", 0) or 0,
+            macd_cross=row.get("macd_cross", "NONE"),
+        ),
+        strength=StrengthIndicators(
+            adx=adx, plus_di=plus_di, minus_di=minus_di,
+            rel_strength=row.get("rel_strength", 0) or 0,
+        ),
+        volume=VolumeIndicators(
+            volume_ratio=volume_ratio,
+            volume_trend=row.get("volume_trend", "NORMAL"),
+        ),
+        volatility=VolatilityIndicators(
+            atr_pct=row.get("atr_pct", 0) or 0,
+            bb_position=row.get("bb_position", 0.5),
+        ),
+        flow=FlowIndicators(
+            cmf=row.get("cmf", 0) or 0,
+            obv_slope_pct=row.get("obv_slope_pct", 0) or 0,
+            mfi=row.get("mfi", 50) or 50,
+            vsa_signal=row.get("vsa_signal", "NEUTRAL") or "NEUTRAL",
+        ),
+    )
 
-    if minus_di > 20 or minus_di > plus_di:
-        adx_pts = min(adx_pts, 2.0)
-    strength_score += adx_pts
-    if adx_pts >= 4.0:
+    trend_score = _score_trend(analysis, close)
+    momentum_score = _score_momentum(analysis)
+    volume_score = _score_volume(analysis)
+    strength_score = _score_strength(analysis)
+    volatility_score = _score_volatility(analysis, close)
+    flow_score = _score_flow(analysis)
+
+    total = (trend_score + momentum_score + volume_score +
+             strength_score + volatility_score + flow_score)
+
+    # conditions_met -- bookkeeping backtest-only, definisi dipertahankan
+    # dari versi sebelumnya (dipakai laporan/analisis backtest, BUKAN
+    # bagian dari raw_score/signal_type).
+    conditions = 0
+    if close > ema20 > ema50 > ema200 > 0 or close > ema20 > ema50 > 0:
+        conditions += 1
+    if ema50 > ema200 > 0:
+        conditions += 1
+    rsi_val = analysis.momentum.rsi
+    if 30 <= rsi_val <= 60:
+        conditions += 1
+    if analysis.momentum.macd_hist > 0:
+        conditions += 1
+    if volume_ratio >= 1.5:
+        conditions += 1
+    bearish_dominant = minus_di > 20 or minus_di > plus_di
+    if adx >= 25 and not bearish_dominant:
         conditions += 1
 
-    if minus_di < 10 and plus_di > minus_di:
-        strength_score += 6
-    elif minus_di < 15 and plus_di > minus_di:
-        strength_score += 3
-    elif minus_di > 20:
-        strength_score -= 3
-
-    if rel_strength >= 10:
-        strength_score += 7
-    elif rel_strength >= 5:
-        strength_score += 5
-    elif rel_strength >= 0:
-        strength_score += 3
-    elif rel_strength >= -5:
-        strength_score += 1
-
-    strength_score = max(0.0, min(strength_score, 21.0))
-
-    # ── Volatility (0-4) ──────────────────────────────────────────
-    # AUDIT (selaras ta_engine.py::_score_volatility, n=63 -> re-validasi
-    # n=140, 27 Jul-4 Aug 2026): volatility_score prediktor terkuat di
-    # kedua sample tapi arahnya terbalik dari desain -- bobot didiskon 10->4.
-    atr_pct = row.get("atr_pct", 0) or 0
-    bb_position = row.get("bb_position", 0.5)
-    volatility_score = 0.0
-
-    if 1.0 <= atr_pct <= 4.0:
-        volatility_score += 2
-    elif 0.5 <= atr_pct < 1.0:
-        volatility_score += 1
-    elif 4.0 < atr_pct <= 6.0:
-        volatility_score += 1
-
-    if 0.1 <= bb_position <= 0.4:
-        volatility_score += 2
-    elif 0.4 < bb_position <= 0.6:
-        volatility_score += 1
-
-    volatility_score = min(volatility_score, 4.0)
-
-    total = trend_score + momentum_score + volume_score + strength_score + volatility_score
     return round(total, 2), conditions
 
 
@@ -395,7 +350,7 @@ def _simulate_trade(
     if entry_idx >= len(df):
         return TradeResult(
             date=signal_date, ticker=ticker, entry=0, exit_price=0,
-            atr=float(atr), tp1=0, sl=0, win=False, exit_reason="NO_NEXT_BAR",
+            atr=float(atr), tp1=0, tp2=0, sl=0, win=False, exit_reason="NO_NEXT_BAR",
             exit_candle=0, gross_pnl_pct=0, net_pnl_pct=0,
             max_gain_pct=0, conditions_met=0,
         )
@@ -406,12 +361,22 @@ def _simulate_trade(
     if atr <= 0 or entry <= 0:
         return TradeResult(
             date=signal_date, ticker=ticker, entry=entry, exit_price=entry,
-            atr=float(atr), tp1=0, sl=0, win=False, exit_reason="INVALID",
+            atr=float(atr), tp1=0, tp2=0, sl=0, win=False, exit_reason="INVALID",
             exit_candle=0, gross_pnl_pct=0, net_pnl_pct=0,
             max_gain_pct=0, conditions_met=0,
         )
 
+    # AUDIT (2026-08, ditemukan saat audit menyeluruh): SEBELUMNYA cuma
+    # TP1 & SL yang disimulasikan di sini -- TP2 (atr_tp2_multiplier,
+    # ADA di settings & DIPAKAI live tracking di signal_evaluator.py::
+    # _walk_price_path, urutan cek SL->TP2->TP1) TIDAK PERNAH disimulasikan
+    # backtest sama sekali. Akibatnya backtest menguji strategi single-
+    # target (exit penuh di TP1) yang BEDA dari yang benar-benar dilacak
+    # live (bisa exit di TP2 kalau harga gap lewat TP1 & TP2 di hari yang
+    # sama). Diperbaiki: tp2 dihitung & urutan cek disamakan persis
+    # dengan _walk_price_path (SL -> TP2 -> TP1).
     tp1 = entry + settings.atr_tp1_multiplier * atr
+    tp2 = entry + settings.atr_tp2_multiplier * atr
     sl = entry - settings.atr_sl_multiplier * atr
 
     max_gain = 0.0
@@ -431,10 +396,17 @@ def _simulate_trade(
         candle_gain = (bar_high - entry) / entry * 100
         max_gain = max(max_gain, candle_gain)
 
-        # Konservatif: SL diperiksa LEBIH DULU (lihat AUDIT NOTE)
+        # Konservatif, SAMA PERSIS urutan dgn signal_evaluator.py::
+        # _walk_price_path -- SL -> TP2 -> TP1 (lihat AUDIT NOTE di atas)
         if bar_low <= sl:
             exit_price = sl
             exit_reason = "SL"
+            exit_candle = i + 1
+            break
+
+        if bar_high >= tp2:
+            exit_price = tp2
+            exit_reason = "TP2"
             exit_candle = i + 1
             break
 
@@ -457,6 +429,7 @@ def _simulate_trade(
         exit_price=exit_price,
         atr=float(atr),
         tp1=tp1,
+        tp2=tp2,
         sl=sl,
         win=net_pnl_pct > 0,
         exit_reason=exit_reason,
