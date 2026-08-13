@@ -569,10 +569,38 @@ def load_broker_flow_top(limit=20):
     except: return []
 
 @st.cache_data(ttl=300)
+def load_broker_flow_top_streak(min_streak_days, limit=20):
+    try:
+        from src.signals.broker_engine import get_top_accumulated_tickers
+        return get_top_accumulated_tickers(limit=limit, min_streak_days=min_streak_days)
+    except: return []
+
+@st.cache_data(ttl=300)
 def load_broker_flow_detail(ticker, days=30):
     try:
         from src.core.database import get_broker_flow_range
         return get_broker_flow_range(ticker, days=days)
+    except: return []
+
+@st.cache_data(ttl=300)
+def load_full_broker_summary(ticker):
+    try:
+        from src.signals.broker_engine import get_full_broker_summary
+        return get_full_broker_summary(ticker)
+    except: return []
+
+@st.cache_data(ttl=600)
+def load_known_brokers():
+    try:
+        from src.signals.broker_engine import get_known_brokers
+        return get_known_brokers()
+    except: return []
+
+@st.cache_data(ttl=300)
+def load_broker_stalker(broker_code, limit=20):
+    try:
+        from src.signals.broker_engine import get_broker_stalker
+        return get_broker_stalker(broker_code, limit=limit)
     except: return []
 
 @st.cache_data(ttl=180)
@@ -1716,7 +1744,7 @@ def page_sector_rotation():
 
 def page_broker_flow():
     st.markdown('<div class="ds-page-title">Broker Flow</div>', unsafe_allow_html=True)
-    st.markdown('<div class="ds-page-sub">Akumulasi/distribusi broker per saham (bandarmology). Belum masuk composite scoring.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ds-page-sub">Akumulasi/distribusi broker per saham (bandarmologi). Belum masuk composite scoring.</div>', unsafe_allow_html=True)
 
     top = load_broker_flow_top(limit=20)
     if not top:
@@ -1726,53 +1754,152 @@ def page_broker_flow():
         )
         return
 
-    df = pd.DataFrame(top)
-    for col in ["total_net_value", "foreign_net_value", "domestic_net_value", "bumn_net_value", "broker_count"]:
-        if col in df.columns:
-            df[col] = df[col].apply(sf)
+    tab_screener, tab_detail, tab_stalker = st.tabs(
+        ["🏆 Top Akumulasi", "🔍 Detail Saham", "🕵️ Broker Stalker"]
+    )
 
-    snap_date = ss(df["trade_date"].iloc[0], "—") if "trade_date" in df.columns and not df.empty else "—"
-    section(f"TOP AKUMULASI — {snap_date}", "🕵️")
+    # ── TAB 1: TOP AKUMULASI (screener) ──────────────────────────
+    with tab_screener:
+        min_streak = st.slider(
+            "Minimal streak akumulasi berturut (hari)", 0, 10, 0,
+            help="0 = tanpa filter. Makin tinggi, makin ketat (saham yang net buy-nya positif N hari berturut-turut)."
+        )
+        top_filtered = load_broker_flow_top(limit=20) if min_streak == 0 else load_broker_flow_top_streak(min_streak, limit=20)
 
-    for i, row in df.iterrows():
-        ticker  = ss(row.get("ticker"), "—")
-        net     = sf(row.get("total_net_value"))
-        fnet    = sf(row.get("foreign_net_value"))
-        dnet    = sf(row.get("domestic_net_value"))
-        bcount  = si(row.get("broker_count"))
-        net_c   = "#4ade80" if net > 0 else "#f87171"
-        f_c     = "#4ade80" if fnet > 0 else "#f87171"
+        if not top_filtered:
+            st.caption("Tidak ada saham yang lolos filter streak ini.")
+        else:
+            df = pd.DataFrame(top_filtered)
+            for col in ["total_net_value", "foreign_net_value", "domestic_net_value", "bumn_net_value", "broker_count"]:
+                if col in df.columns:
+                    df[col] = df[col].apply(sf)
 
+            snap_date = ss(df["trade_date"].iloc[0], "—") if "trade_date" in df.columns and not df.empty else "—"
+            section(f"TOP AKUMULASI — {snap_date}", "🏆")
+
+            for i, row in df.iterrows():
+                ticker  = ss(row.get("ticker"), "—")
+                net     = sf(row.get("total_net_value"))
+                fnet    = sf(row.get("foreign_net_value"))
+                dnet    = sf(row.get("domestic_net_value"))
+                bcount  = si(row.get("broker_count"))
+                streak  = row.get("accumulation_streak_days")
+                net_c   = "#4ade80" if net > 0 else "#f87171"
+                f_c     = "#4ade80" if fnet > 0 else "#f87171"
+                streak_html = f'<div class="ds-chip" style="width:70px;text-align:center">🔥 {si(streak)}d</div>' if streak else '<div style="width:70px"></div>'
+
+                st.markdown(
+                    f'<div class="ds-card" style="padding:14px 20px;margin-bottom:8px">'
+                    f'<div style="display:flex;align-items:center;gap:14px">'
+                    f'<div style="width:36px;font-size:1.1rem">#{i+1}</div>'
+                    f'<div style="width:100px;font-weight:700">{ticker}</div>'
+                    f'<div class="ds-num" style="width:150px;text-align:right;color:{net_c}">Net Rp{net:,.0f}</div>'
+                    f'<div class="ds-num" style="width:150px;text-align:right;color:{f_c}">Asing Rp{fnet:,.0f}</div>'
+                    f'<div class="ds-num" style="width:140px;text-align:right;color:#9aa4b8">Domestik Rp{dnet:,.0f}</div>'
+                    f'<div class="ds-num" style="width:80px;text-align:right;color:#9aa4b8">{bcount} broker</div>'
+                    f'{streak_html}'
+                    f'</div></div>',
+                    unsafe_allow_html=True
+                )
+
+    # ── TAB 2: DETAIL SAHAM (chart + tabel broker lengkap + asing/domestik) ──
+    with tab_detail:
+        all_tickers = [t["ticker"] for t in top]
+        ticker_pick = st.selectbox("Pilih saham", all_tickers, key="broker_detail_ticker")
+        if ticker_pick:
+            detail = load_broker_flow_detail(ticker_pick, days=30)
+            if detail:
+                ddf = pd.DataFrame(detail).sort_values("trade_date")
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=ddf["trade_date"], y=ddf["total_net_value"],
+                    marker_color=[("#00c896" if v > 0 else "#f87171") for v in ddf["total_net_value"]],
+                    name="Net Value"
+                ))
+                fig.update_layout(title=f"Net Broker Flow — {ticker_pick} (30 hari)", height=300, **LAYOUT)
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Breakdown Asing/Domestik/BUMN (BARU) -- data sudah ada di
+                # v_broker_net_flow_daily sejak awal, sekarang baru disurface
+                latest_row = ddf.iloc[-1]
+                section("BREAKDOWN INVESTOR TYPE (hari terakhir)", "🌏")
+                bc1, bc2, bc3 = st.columns(3)
+                fnet = sf(latest_row.get("foreign_net_value"))
+                dnet = sf(latest_row.get("domestic_net_value"))
+                bnet = sf(latest_row.get("bumn_net_value"))
+                with bc1: st.markdown(tile("Asing", f"Rp{fnet:+,.0f}"), unsafe_allow_html=True)
+                with bc2: st.markdown(tile("Domestik", f"Rp{dnet:+,.0f}"), unsafe_allow_html=True)
+                with bc3: st.markdown(tile("BUMN", f"Rp{bnet:+,.0f}"), unsafe_allow_html=True)
+            else:
+                st.caption("Belum ada histori broker flow untuk saham ini.")
+
+            # Ringkasan Broker Lengkap (BARU, ala NeoBDM) -- semua broker,
+            # bukan cuma top-3 seperti Flow Radar/leaderboard.
+            section("RINGKASAN BROKER LENGKAP", "📋")
+            full_summary = load_full_broker_summary(ticker_pick)
+            if full_summary:
+                fdf = pd.DataFrame(full_summary)
+                show_cols = [c for c in ["broker_code", "broker_name", "buy_value", "sell_value",
+                                          "net_value", "net_volume", "buy_frequency", "sell_frequency"]
+                             if c in fdf.columns]
+                fdf_display = fdf[show_cols].rename(columns={
+                    "broker_code": "Kode", "broker_name": "Nama Broker",
+                    "buy_value": "Buy Value", "sell_value": "Sell Value",
+                    "net_value": "Net Value", "net_volume": "Net Volume",
+                    "buy_frequency": "Freq Beli", "sell_frequency": "Freq Jual",
+                })
+                st.dataframe(fdf_display, use_container_width=True, hide_index=True)
+                st.caption(f"{len(fdf)} broker tercatat bertransaksi pada tanggal terakhir yang tersedia.")
+            else:
+                st.caption("Belum ada data ringkasan broker lengkap untuk saham ini.")
+
+    # ── TAB 3: BROKER STALKER (BARU, ala NeoBDM) ─────────────────
+    with tab_stalker:
         st.markdown(
-            f'<div class="ds-card" style="padding:14px 20px;margin-bottom:8px">'
-            f'<div style="display:flex;align-items:center;gap:14px">'
-            f'<div style="width:36px;font-size:1.1rem">#{i+1}</div>'
-            f'<div style="width:110px;font-weight:700">{ticker}</div>'
-            f'<div class="ds-num" style="width:160px;text-align:right;color:{net_c}">Net Rp{net:,.0f}</div>'
-            f'<div class="ds-num" style="width:160px;text-align:right;color:{f_c}">Asing Rp{fnet:,.0f}</div>'
-            f'<div class="ds-num" style="width:150px;text-align:right;color:#9aa4b8">Domestik Rp{dnet:,.0f}</div>'
-            f'<div class="ds-num" style="width:90px;text-align:right;color:#9aa4b8">{bcount} broker</div>'
-            f'</div></div>',
+            '<div class="ds-caption">Lacak 1 broker lintas SEMUA saham — lihat saham apa saja '
+            'yang paling banyak diakumulasi/didistribusi broker tertentu hari ini.</div>',
             unsafe_allow_html=True
         )
-
-    section("DETAIL PER SAHAM", "🔍")
-    ticker_pick = st.selectbox("Pilih saham", df["ticker"].tolist() if "ticker" in df.columns else [])
-    if ticker_pick:
-        detail = load_broker_flow_detail(ticker_pick, days=30)
-        if detail:
-            ddf = pd.DataFrame(detail).sort_values("trade_date")
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                x=ddf["trade_date"], y=ddf["total_net_value"],
-                marker_color=[("#00c896" if v > 0 else "#f87171") for v in ddf["total_net_value"]],
-                name="Net Value"
-            ))
-            fig.update_layout(title=f"Net Broker Flow — {ticker_pick} (30 hari)", height=340,
-                              **LAYOUT)
-            st.plotly_chart(fig, use_container_width=True)
+        st.write("")
+        brokers = load_known_brokers()
+        if not brokers:
+            st.info(
+                "Daftar broker_classification masih kosong. Tambahkan minimal beberapa kode "
+                "broker (lihat migration 004_broker_summary.sql) supaya Broker Stalker bisa dipakai."
+            )
         else:
-            st.caption("Belum ada histori broker flow untuk saham ini.")
+            broker_options = {f"{b['broker_code']} — {ss(b.get('broker_name'), '?')} ({ss(b.get('investor_type'), '?')})": b["broker_code"] for b in brokers}
+            picked_label = st.selectbox("Pilih broker", list(broker_options.keys()))
+            broker_code = broker_options[picked_label]
+
+            stalker_rows = load_broker_stalker(broker_code, limit=20)
+            if not stalker_rows:
+                st.caption(f"Belum ada aktivitas tercatat untuk broker {broker_code}.")
+            else:
+                sdf = pd.DataFrame(stalker_rows)
+                snap_date = ss(sdf["trade_date"].iloc[0], "—") if "trade_date" in sdf.columns else "—"
+                section(f"AKTIVITAS {broker_code} — {snap_date}", "🕵️")
+
+                for i, row in sdf.iterrows():
+                    ticker = ss(row.get("ticker"), "—")
+                    net = sf(row.get("net_value"))
+                    buy_v = sf(row.get("buy_value"))
+                    sell_v = sf(row.get("sell_value"))
+                    net_c = "#4ade80" if net > 0 else "#f87171"
+                    action = "AKUMULASI" if net > 0 else "DISTRIBUSI"
+
+                    st.markdown(
+                        f'<div class="ds-card" style="padding:12px 20px;margin-bottom:6px">'
+                        f'<div style="display:flex;align-items:center;gap:14px">'
+                        f'<div style="width:32px;color:#5c6478">#{i+1}</div>'
+                        f'<div style="width:100px;font-weight:700">{ticker}</div>'
+                        f'<div style="width:110px"><span class="ds-flow {"ds-flow-acc" if net>0 else "ds-flow-dist"}">{action}</span></div>'
+                        f'<div class="ds-num" style="width:150px;text-align:right;color:{net_c}">Net Rp{net:,.0f}</div>'
+                        f'<div class="ds-num" style="width:130px;text-align:right;color:#9aa4b8">Buy Rp{buy_v:,.0f}</div>'
+                        f'<div class="ds-num" style="width:130px;text-align:right;color:#9aa4b8">Sell Rp{sell_v:,.0f}</div>'
+                        f'</div></div>',
+                        unsafe_allow_html=True
+                    )
 
 
 # ══════════════════════════════════════════════════════════════════

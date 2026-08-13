@@ -626,9 +626,20 @@ def signal_result_exists(ticker: str, signal_date: str, signal_type: str) -> boo
 
 def bulk_insert_broker_summary(rows: list[dict], source_provider: str) -> int:
     """
-    Bulk upsert broker_summary. net_volume/net_value dihitung DI SINI
-    (bukan tanggung jawab provider) supaya konsisten apapun vendor-nya --
-    lihat kontrak di BaseBrokerDataProvider (src/providers/broker_data.py).
+    Bulk upsert broker_summary.
+
+    net_volume/net_value: PREFER nilai yang sudah dikirim provider kalau
+    ada (co. IDX Edge PRO kirim nval/nvol langsung -- vendor ini malah
+    TIDAK kasih buy_volume/sell_volume terpisah sama sekali, jadi net_volume
+    HARUS dari provider, tidak bisa dihitung dari selisih). Fallback
+    hitung dari buy_value-sell_value / buy_volume-sell_volume HANYA kalau
+    provider tidak mengirim net_value/net_volume langsung -- supaya kode
+    ini tetap kompatibel dengan provider LAIN yang mungkin kasih breakdown
+    penuh tapi tidak menghitung net-nya sendiri.
+    AUDIT (2026-08): sebelumnya SELALU dihitung dari buy-sell, mengabaikan
+    net_value/net_volume yang mungkin sudah dikirim provider — untuk IDX
+    Edge PRO ini berarti net_volume selalu jadi 0-(-0)=0 (salah, karena
+    buy_volume/sell_volume memang tidak pernah diisi provider ini).
     Batch kecil + retry, mengikuti pola bulk_insert_prices (Supabase nano
     sensitif terhadap request paralel/besar).
     """
@@ -642,16 +653,25 @@ def bulk_insert_broker_summary(rows: list[dict], source_provider: str) -> int:
 
     payload = []
     for r in rows:
-        buy_vol = r.get("buy_volume") or 0
-        sell_vol = r.get("sell_volume") or 0
-        buy_val = r.get("buy_value") or 0
-        sell_val = r.get("sell_value") or 0
-        payload.append({
-            **r,
-            "net_volume": buy_vol - sell_vol,
-            "net_value": buy_val - sell_val,
-            "source_provider": source_provider,
-        })
+        row = dict(r)
+        row["source_provider"] = source_provider
+
+        if row.get("net_value") is None:
+            buy_val = row.get("buy_value") or 0
+            sell_val = row.get("sell_value") or 0
+            row["net_value"] = buy_val - sell_val
+
+        if row.get("net_volume") is None:
+            buy_vol = row.get("buy_volume")
+            sell_vol = row.get("sell_volume")
+            if buy_vol is not None or sell_vol is not None:
+                row["net_volume"] = (buy_vol or 0) - (sell_vol or 0)
+            # kalau buy_volume & sell_volume DUANYA None (co. IDX Edge PRO
+            # tanpa net_volume terkirim -- seharusnya tidak terjadi tapi
+            # dijaga), net_volume dibiarkan None -- JANGAN paksa jadi 0,
+            # nol dan "tidak diketahui" beda makna buat analisis flow.
+
+        payload.append(row)
 
     for i in range(0, len(payload), batch_size):
         batch = payload[i:i + batch_size]

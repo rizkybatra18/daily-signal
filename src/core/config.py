@@ -140,13 +140,22 @@ class Settings(BaseSettings):
     history_days_warmup: int = 252    # ~1 tahun untuk warm up indikator
     history_days_scan: int = 252      # Data yang diambil untuk scan
 
-    # ── Broker Summary / Bandarmology (migration 004) ─────────────
-    # BROKER_DATA_PROVIDER kosong = fitur nonaktif (NotConfiguredProvider,
-    # lihat src/providers/broker_data.py). Isi dengan nama vendor setelah
-    # provider konkret diimplementasikan & subscription aktif.
+    # ── Broker Summary / Bandarmologi (migration 004) ─────────────
+    # Provider aktif: IDX Edge PRO (stock.arjum.com), kuota harian
+    # GRATIS (reset 00:00 WIB) -- lihat src/providers/broker_data.py::
+    # ArjumIdxEdgeProvider. Untuk mengaktifkan, isi di .env:
+    #   BROKER_DATA_PROVIDER=arjum_idx_edge
+    #   ARJUM_IDX_EDGE_API_KEY=sk_live_xxx   (dari dashboard developer stock.arjum.com)
+    #   BROKER_SCAN_ENABLED=True
+    # Default TETAP nonaktif (kosong/False) sampai di-set eksplisit --
+    # JANGAN aktifkan sebelum migration 004 dijalankan di Supabase.
     broker_data_provider: str = ""
-    broker_scan_enabled: bool = False   # matikan cmd_broker_scan sampai provider siap
-    broker_scan_top_n: int = 100        # cuma scan N saham teratas by liquidity (hemat API quota vendor)
+    broker_scan_enabled: bool = False
+    # Kuota harian gratis vendor terbatas -- cuma scan N saham paling
+    # likuid (get_top_liquid_tickers di database.py), bukan seluruh
+    # universe (~550 ticker). Naikkan pelan-pelan sambil pantau kuota
+    # tersisa di dashboard developer vendor, jangan langsung dimaksimalkan.
+    broker_scan_top_n: int = 100
 
 
 settings = Settings()

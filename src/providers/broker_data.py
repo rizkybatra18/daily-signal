@@ -2,28 +2,30 @@
 DAILY SIGNAL — Broker Summary Data Provider (Abstraction Layer)
 Mengikuti pola src/providers/market_data.py (BaseMarketDataProvider).
 
-STATUS: BELUM ADA PROVIDER KONKRET TERPASANG.
+STATUS: AKTIF -- provider IDX Edge PRO (stock.arjum.com) terpasang.
 
 AUDIT (lihat AUDIT_REPORT_v2.md bagian Universe Manager & config.py
 baris ~40): idx.co.id SECARA EKSPLISIT MELARANG scraping/crawling di
 Syarat Penggunaan mereka (poin 6) dan situsnya bot-blocked. Broker
-Summary resmi memang dipublikasikan gratis di idx.co.id/en/market-data/
-trading-summary/broker-summary, TAPI karena larangan ToS yang sama
+Summary resmi IDX memang gratis, TAPI karena larangan ToS yang sama
 persis dengan yang sudah diaudit untuk data harga, scraping halaman
-itu TIDAK direkomendasikan -- konsisten dengan keputusan yang sudah
-diambil sistem ini untuk daily_prices (pindah ke Yahoo Finance).
+itu TIDAK dipakai -- konsisten dengan keputusan sistem ini untuk
+daily_prices (pakai Yahoo Finance, bukan scraping IDX langsung).
 
-Jalan yang konsisten dengan prinsip yang sama: pakai vendor API yang
-sudah reselling/repackage data ini secara legal (co. Invezgo, Sectors.app,
-atau vendor lain yang py punya lisensi redistribusi), ATAU data resmi
-IDX Data Services (berbayar, langsung dari bursa, paling "bersih" secara
-legal). Cara menambah provider baru:
+Provider yang dipakai: IDX Edge PRO (stock.arjum.com) -- REST API
+pihak ketiga dengan kuota harian GRATIS (reset 00:00 WIB). Sudah
+diverifikasi: ToS & Privacy Policy publik ada (stock.arjum.com/terms,
+/privacy), tidak melarang pemakaian terprogram selama tidak scraping
+berlebihan/eksploitasi kuota -- konsisten dipakai lewat REST API resmi
+dengan API key terdaftar (bukan scraping HTML), rate-limited di bawah.
+
+Cara menambah provider lain (kalau suatu saat pindah/nambah vendor):
 
     class VendorXProvider(BaseBrokerDataProvider):
         def fetch_broker_summary(self, ticker, trade_date) -> list[dict]:
             ...
 
-lalu daftarkan di BrokerDataProvider._init_providers() di bawah,
+lalu daftarkan di BrokerDataProvider._init_provider() di bawah,
 dan set BROKER_DATA_PROVIDER di .env ke nama vendor tsb.
 """
 
@@ -47,15 +49,19 @@ class BaseBrokerDataProvider(ABC):
     Interface untuk semua broker summary data provider.
 
     Kontrak return: list of dict, 1 dict per broker per ticker per hari,
-    dengan key persis sesuai kolom tabel broker_summary (lihat migration
-    004_broker_summary.sql):
-        ticker, trade_date, broker_code,
-        buy_volume, buy_value, avg_buy_price,
-        sell_volume, sell_value, avg_sell_price
+    dengan key sesuai kolom tabel broker_summary (lihat migration
+    004_broker_summary.sql). WAJIB ada: ticker, trade_date, broker_code.
+    Field lain OPSIONAL tergantung apa yang disediakan vendor -- tidak
+    semua vendor kasih breakdown yang sama (co. IDX Edge PRO cuma kasih
+    net_volume, bukan buy_volume/sell_volume terpisah):
+        buy_value, sell_value, net_value, net_volume,
+        buy_frequency, sell_frequency, broker_name,
+        buy_volume, sell_volume, avg_buy_price, avg_sell_price  (opsional)
 
-    net_volume/net_value TIDAK perlu dihitung provider -- itu tanggung
-    jawab data layer (lihat save_broker_summary_batch di database.py)
-    supaya konsisten apapun provider-nya.
+    net_value/net_volume BOLEH dikirim langsung oleh provider (kalau
+    vendor sudah menghitungnya, seperti IDX Edge PRO) -- data layer
+    (bulk_insert_broker_summary di database.py) hanya menghitung ulang
+    dari buy/sell KALAU provider tidak mengirimkannya langsung.
     """
 
     @abstractmethod
@@ -74,11 +80,20 @@ class BaseBrokerDataProvider(ABC):
         pass
 
     def validate_broker_summary(self, rows: list[dict]) -> bool:
-        """Validasi minimal sebelum data masuk DB."""
+        """
+        Validasi minimal sebelum data masuk DB. Cuma cek identitas baris
+        (ticker/trade_date/broker_code) -- TIDAK mewajibkan buy_volume/
+        sell_volume lagi (lihat AUDIT di atas, tidak semua vendor kasih
+        breakdown itu) selama ada minimal satu ukuran nilai transaksi.
+        """
         if not rows:
             return False
-        required = {"ticker", "trade_date", "broker_code", "buy_volume", "sell_volume"}
-        return all(required.issubset(r.keys()) for r in rows)
+        required = {"ticker", "trade_date", "broker_code"}
+        value_keys = {"buy_value", "sell_value", "net_value", "net_volume"}
+        return all(
+            required.issubset(r.keys()) and any(r.get(k) is not None for k in value_keys)
+            for r in rows
+        )
 
 
 # ── Provider belum dikonfigurasi (default aman) ──────────────────────
@@ -94,57 +109,132 @@ class NotConfiguredProvider(BaseBrokerDataProvider):
     def fetch_broker_summary(self, ticker: str, trade_date: date) -> Optional[list[dict]]:
         raise NotImplementedError(
             "Belum ada broker data provider yang dikonfigurasi. "
-            "Set BROKER_DATA_PROVIDER di .env (mis. 'invezgo', 'sectors_app') "
-            "dan implementasikan kelas provider-nya di "
-            "src/providers/broker_data.py sebelum menjalankan broker scan. "
+            "Set BROKER_DATA_PROVIDER=arjum_idx_edge dan ARJUM_IDX_EDGE_API_KEY "
+            "di .env untuk pakai IDX Edge PRO (stock.arjum.com), atau "
+            "implementasikan provider lain di src/providers/broker_data.py. "
             "Lihat docstring modul ini untuk detail."
         )
 
 
-# ── Contoh kerangka provider vendor (BELUM AKTIF, ISI SENDIRI) ───────
-#
-# class InvezgoProvider(BaseBrokerDataProvider):
-#     """
-#     Contoh kerangka -- SESUAIKAN dengan dokumentasi API vendor
-#     sebenarnya sebelum dipakai (endpoint, auth header, bentuk
-#     response JSON di bawah ini masih PLACEHOLDER, belum diverifikasi).
-#     """
-#
-#     def __init__(self):
-#         import os
-#         self.api_key = os.environ.get("INVEZGO_API_KEY", "")
-#         if not self.api_key:
-#             raise EnvironmentError("INVEZGO_API_KEY belum diset di .env")
-#         self._lock = threading.Lock()
-#         self._last_call = 0.0
-#         self._min_interval = 0.3   # sesuaikan rate limit vendor
-#
-#     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-#     def fetch_broker_summary(self, ticker: str, trade_date: date) -> Optional[list[dict]]:
-#         import requests
-#         resp = requests.get(
-#             "https://api.invezgo.com/v1/broker-summary",   # VERIFIKASI URL SEBENARNYA
-#             params={"symbol": ticker.replace(".JK", ""), "date": trade_date.isoformat()},
-#             headers={"Authorization": f"Bearer {self.api_key}"},
-#             timeout=15,
-#         )
-#         resp.raise_for_status()
-#         data = resp.json()
-#         rows = []
-#         for row in data.get("brokers", []):   # VERIFIKASI BENTUK RESPONSE SEBENARNYA
-#             rows.append({
-#                 "ticker": ticker,
-#                 "trade_date": trade_date.isoformat(),
-#                 "broker_code": row["broker_code"],
-#                 "buy_volume": row.get("buy_volume", 0),
-#                 "buy_value": row.get("buy_value", 0),
-#                 "avg_buy_price": row.get("avg_buy_price"),
-#                 "sell_volume": row.get("sell_volume", 0),
-#                 "sell_value": row.get("sell_value", 0),
-#                 "avg_sell_price": row.get("avg_sell_price"),
-#                 "source_provider": "invezgo",
-#             })
-#         return rows if rows else None
+# ── IDX Edge PRO (stock.arjum.com) ────────────────────────────────────
+
+class ArjumIdxEdgeProvider(BaseBrokerDataProvider):
+    """
+    Provider aktif: IDX Edge PRO (stock.arjum.com), endpoint
+    GET /api/broker-summary/{code}.
+
+    Kuota harian GRATIS (reset 00:00 WIB) -- ToS platform ini melarang
+    "scraping berlebihan yang mengganggu kestabilan server" dan
+    "eksploitasi celah kuota harian" (stock.arjum.com/terms). Provider
+    ini dipakai lewat REST API resmi dengan API key terdaftar (bukan
+    scraping HTML), dan SENGAJA rate-limited (_min_interval) + hanya
+    dipanggil untuk top-N saham paling likuid (lihat
+    get_top_liquid_tickers di database.py, dipakai cmd_broker_scan di
+    runner.py) supaya hemat kuota, konsisten dengan semangat ToS.
+
+    Bentuk response (diverifikasi langsung dari dokumentasi vendor,
+    2026-08 -- BUKAN tebakan):
+        {
+          "flow": "all", "stock_code": "BBCA", "latest_date": "...",
+          "broker_start": "...", "broker_end": "...",
+          "brokers": [
+            {"broker_code": "BK", "broker_name": "J.P. Morgan Sekuritas",
+             "bval": 85400000000, "sval": 12000000000, "nval": 73400000000,
+             "nvol": 71600, "bfrq": 1500, "sfrq": 2800},
+            ...
+          ]
+        }
+
+    CATATAN: vendor ini TIDAK memberi breakdown buy_volume/sell_volume
+    terpisah -- cuma net_volume (nvol). buy_volume/sell_volume/
+    avg_buy_price/avg_sell_price di kontrak dasar SENGAJA dibiarkan
+    kosong untuk provider ini (lihat migration 004, kolom nullable).
+    """
+
+    BASE_URL = "https://stock.arjum.com/api/broker-summary"
+
+    def __init__(self):
+        import os
+        self.api_key = os.environ.get("ARJUM_IDX_EDGE_API_KEY", "")
+        if not self.api_key:
+            raise EnvironmentError("ARJUM_IDX_EDGE_API_KEY belum diset di .env")
+        self._lock = threading.Lock()
+        self._last_call = 0.0
+        # Vendor tidak publish angka rate-limit resmi di dokumentasi yang
+        # kami baca -- 0.5s jeda antar call adalah pilihan konservatif
+        # sendiri (hemat kuota + hormati ToS "jangan ganggu kestabilan
+        # server"), BUKAN angka resmi dari vendor. Sesuaikan turun kalau
+        # vendor mempublikasikan rate limit resmi yang lebih longgar.
+        self._min_interval = 0.5
+
+    def _throttle(self):
+        with self._lock:
+            elapsed = time.time() - self._last_call
+            if elapsed < self._min_interval:
+                time.sleep(self._min_interval - elapsed)
+            self._last_call = time.time()
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def fetch_broker_summary(self, ticker: str, trade_date: date) -> Optional[list[dict]]:
+        import requests
+
+        self._throttle()
+
+        code = ticker.replace(".JK", "")
+        date_str = trade_date.isoformat()
+        url = f"{self.BASE_URL}/{code}"
+        params = {
+            "start_date": date_str,
+            "end_date": date_str,     # start=end=1 hari spesifik -- granularitas harian,
+                                        # BUKAN aggregate range (API ini support range juga,
+                                        # tapi kita butuh 1 baris per hari per broker).
+            "net": "false",             # false = tetap kasih bval/sval, bukan cuma net
+            "broker_limit": 30,         # sedikit di atas default vendor (20) -- cakupan
+                                        # broker lebih luas tanpa all_data=true (lebih hemat)
+            "level_limit": 25,
+            "all_data": "false",
+            "flow": "all",
+        }
+        headers = {
+            "X-API-Key": self.api_key,
+            "Accept": "application/json",
+        }
+
+        resp = requests.get(url, params=params, headers=headers, timeout=15)
+
+        if resp.status_code == 401 or resp.status_code == 403:
+            # API key salah/expired -- jangan retry (percuma), gagal jelas
+            raise EnvironmentError(
+                f"IDX Edge PRO menolak API key (HTTP {resp.status_code}). "
+                "Cek ARJUM_IDX_EDGE_API_KEY di .env."
+            )
+        resp.raise_for_status()
+
+        payload = resp.json()
+        brokers = payload.get("brokers", [])
+        if not brokers:
+            return None
+
+        rows = []
+        for b in brokers:
+            broker_code = b.get("broker_code")
+            if not broker_code:
+                continue
+            rows.append({
+                "ticker": ticker,
+                "trade_date": date_str,
+                "broker_code": broker_code,
+                "broker_name": b.get("broker_name"),
+                "buy_value": b.get("bval", 0) or 0,
+                "sell_value": b.get("sval", 0) or 0,
+                "net_value": b.get("nval"),
+                "net_volume": b.get("nvol"),
+                "buy_frequency": b.get("bfrq"),
+                "sell_frequency": b.get("sfrq"),
+                "source_provider": "arjum_idx_edge",
+            })
+
+        return rows if rows else None
 
 
 # ── Provider Factory ─────────────────────────────────────────────────
@@ -163,7 +253,9 @@ class BrokerDataProvider:
         return self._provider_name
 
     def _init_provider(self, name: str) -> BaseBrokerDataProvider:
-        # Daftarkan provider vendor konkret di sini begitu diimplementasikan, mis.:
+        if name == "arjum_idx_edge":
+            return ArjumIdxEdgeProvider()
+        # Daftarkan provider vendor lain di sini kalau suatu saat pindah/nambah, mis.:
         # if name == "invezgo":
         #     return InvezgoProvider()
         return NotConfiguredProvider()
@@ -181,9 +273,15 @@ class BrokerDataProvider:
         self,
         tickers: list[str],
         trade_date: date,
-        max_workers: int = 5,
+        max_workers: int = 3,
     ) -> dict[str, list[dict]]:
-        """Fetch broker summary untuk banyak ticker secara paralel, 1 tanggal."""
+        """
+        Fetch broker summary untuk banyak ticker secara paralel, 1 tanggal.
+        max_workers default DIKECILKAN (5->3) dibanding market_data.py --
+        provider broker summary rate-limited internal (_throttle), jadi
+        paralelisme tinggi di sini tidak menambah throughput, cuma bikin
+        thread nunggu di lock yang sama.
+        """
         import concurrent.futures
         results: dict[str, list[dict]] = {}
 
@@ -192,7 +290,7 @@ class BrokerDataProvider:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(fetch_one, t): t for t in tickers}
-            for future in concurrent.futures.as_completed(futures, timeout=180):
+            for future in concurrent.futures.as_completed(futures, timeout=300):
                 ticker = futures[future]
                 try:
                     t, rows = future.result()

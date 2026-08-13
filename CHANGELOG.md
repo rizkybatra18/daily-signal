@@ -2,6 +2,89 @@
 
 ---
 
+## v2.6.1 — Fitur ala NeoBDM: Broker Stalker & Ringkasan Broker Lengkap (2026-08)
+
+### ✨ Fitur baru di broker_engine.py + halaman Broker Flow
+Diminta user: bangun fitur setara NeoBDM di atas broker_summary yang
+baru aktif (v2.6.0). Halaman "Broker Flow" sekarang 3 tab:
+
+- **🕵️ Broker Stalker (BARU)** — lacak SATU broker lintas SEMUA saham
+  pada 1 tanggal (`get_broker_stalker`), ranking by |net_value| (jadi
+  distribusi besar tetap muncul, bukan cuma akumulasi). Dropdown broker
+  diisi dari `broker_classification`. Ini fitur paling khas NeoBDM yang
+  belum ada sebelumnya — beda arah dari Broker Flow biasa (1 saham,
+  semua broker) menjadi (1 broker, semua saham).
+- **📋 Ringkasan Broker Lengkap (BARU)** — tabel SEMUA broker per saham
+  (`get_full_broker_summary`), bukan cuma top-3 seperti leaderboard
+  sebelumnya. Termasuk `buy_frequency`/`sell_frequency` (jumlah
+  transaksi) yang sebelumnya tersimpan tapi tidak pernah ditampilkan.
+- **🌏 Breakdown Investor Type** — Asing/Domestik/BUMN net value per
+  saham, disurface pertama kali (datanya sudah ada di
+  `v_broker_net_flow_daily` sejak v2.4.0, cuma belum pernah ditampilkan).
+- **Screener dengan filter streak** — `get_top_accumulated_tickers`
+  dapat parameter `min_streak_days` (ala NeoBDM "consistent accumulation"),
+  dihitung cuma untuk kandidat teratas (bukan N+1 query ke seluruh
+  universe) supaya tetap ringan.
+- `get_broker_footprint()` — histori 1 broker di 1 saham selama N hari
+  (dasar untuk chart "jejak" broker, siap dipakai kalau mau extend lagi).
+
+Diuji dengan data tiruan multi-saham (termasuk kasus distribusi
+negatif tetap ranking benar).
+
+---
+
+## v2.6.0 — Broker Summary AKTIF: Provider IDX Edge PRO (2026-08)
+
+### 🎯 Latar belakang
+Fitur broker summary/bandarmologi yang ditunda di v2.4.0 (belum ada
+sumber data) sekarang AKTIF — user menemukan vendor IDX Edge PRO
+(stock.arjum.com) dengan kuota harian GRATIS (reset 00:00 WIB).
+Diverifikasi dulu sebelum dipakai: ToS & Privacy Policy publik ada,
+tidak melarang pemakaian terprogram via REST API resmi (hanya melarang
+scraping berlebihan/eksploitasi kuota) — konsisten dipakai dengan API
+key terdaftar, bukan scraping HTML.
+
+### ✨ Provider aktif
+- **`ArjumIdxEdgeProvider`** di `src/providers/broker_data.py` —
+  implementasi nyata (bukan kerangka placeholder lagi) untuk endpoint
+  `GET /api/broker-summary/{code}`, auth via header `X-API-Key`.
+  Rate-limited (0.5s/call, konservatif — vendor tidak publish angka
+  resmi) + `max_workers=3` di `fetch_batch` (turun dari 5, karena
+  provider sudah throttle internal, paralelisme tinggi cuma bikin
+  thread antre di lock yang sama).
+- Set aktif via `.env`: `BROKER_DATA_PROVIDER=arjum_idx_edge`,
+  `ARJUM_IDX_EDGE_API_KEY=sk_live_xxx`, `BROKER_SCAN_ENABLED=True`.
+
+### 🗄️ Skema disesuaikan dengan data vendor asli (migration 004 direvisi)
+Skema awal (v2.4.0) speculative/generik (`buy_volume`/`sell_volume`
+per sisi) — vendor asli **tidak memberi breakdown itu**, cuma
+`net_volume` langsung + `broker_name`, `buy_frequency`/`sell_frequency`
+(BARU, jumlah transaksi — sinyal karakter flow: sedikit transaksi
+besar vs banyak transaksi kecil). Migration 004 direvisi (belum
+sempat dijalankan user, jadi aman direvisi langsung tanpa migration
+tambahan): kolom `buy_volume`/`sell_volume`/`avg_buy_price`/
+`avg_sell_price` tetap ada tapi nullable (disiapkan untuk provider
+lain yang mungkin punya data lebih detail), TIDAK diisi provider ini.
+
+### 🐛 Bug ditemukan & diperbaiki
+`bulk_insert_broker_summary()` di `database.py` **SELALU menghitung
+ulang** `net_value`/`net_volume` dari `buy_value - sell_value` /
+`buy_volume - sell_volume` — untuk IDX Edge PRO ini FATAL, karena
+`buy_volume`/`sell_volume` provider ini memang selalu kosong, jadi
+`net_volume` akan selalu ke-overwrite jadi 0 (padahal vendor sudah
+kirim nilai net yang benar). Diperbaiki: net_value/net_volume dari
+provider dipakai langsung kalau ada, cuma dihitung ulang sebagai
+fallback. **Dibuktikan dengan test**: payload net_volume 71.600 dari
+vendor, sebelum fix akan jadi 0, sekarang tetap 71.600.
+
+### 🧪 Diuji dengan response asli vendor
+Bukan cuma baca kode — smoke test pakai JSON response PERSIS dari
+dokumentasi vendor (3 broker: BK/J.P. Morgan, ZP/Maybank, AK/UBS),
+verifikasi URL/params/header yang dikirim benar DAN mapping ke kolom
+DB benar (termasuk bug net_volume di atas, dites before/after).
+
+---
+
 ## v2.5.1 — Audit Menyeluruh Hulu-ke-Hilir (2026-08)
 
 ### 🔍 Latar belakang
