@@ -42,6 +42,19 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       APP_ENV: production
       LOG_LEVEL: INFO
+      # Broker Summary / Bandarmologi (v2.6.0+) -- BROKER_DATA_PROVIDER
+      # & BROKER_SCAN_ENABLED bukan rahasia, ditulis langsung di sini
+      # (bukan lewat secrets) supaya tidak perlu setup tambahan di GitHub
+      # selain API key-nya sendiri. ARJUM_IDX_EDGE_API_KEY DIASUMSIKAN
+      # nama secret yang dipakai -- kalau nama secret Anda beda, sesuaikan
+      # baris ini (satu-satunya baris yang perlu diedit manual).
+      BROKER_DATA_PROVIDER: arjum_idx_edge
+      BROKER_SCAN_ENABLED: "true"
+      ARJUM_IDX_EDGE_API_KEY: ${{ secrets.ARJUM_IDX_EDGE_API_KEY }}
+      # Berapa saham paling likuid yang di-scan tiap hari -- naikkan di
+      # sini (BUKAN di kode .py) kalau kuota harian vendor Anda longgar.
+      # Default konservatif (30) supaya aman untuk kuota gratis standar.
+      BROKER_SCAN_TOP_N: "30"
 
     steps:
       - uses: actions/checkout@v4
@@ -65,6 +78,14 @@ jobs:
 
       - name: "📊 Full Daily Scan"
         run: python -m src.runner daily_scan
+
+      - name: "🕵️ Broker Scan (Bandarmologi)"
+        # Terpisah dari daily_scan utama -- continue-on-error supaya kalau
+        # kuota harian vendor habis / API down, tidak menggagalkan seluruh
+        # pipeline. Lihat src/providers/broker_data.py::ArjumIdxEdgeProvider.
+        run: python -m src.runner broker_scan
+        continue-on-error: true
+        timeout-minutes: 15
 
       - name: "💼 Update Portfolio"
         run: python -m src.runner update_portfolio
