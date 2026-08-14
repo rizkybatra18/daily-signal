@@ -151,15 +151,17 @@ class Settings(BaseSettings):
     # JANGAN aktifkan sebelum migration 004 dijalankan di Supabase.
     broker_data_provider: str = ""
     broker_scan_enabled: bool = False
-    # Kuota harian gratis vendor terbatas -- cuma scan N saham paling
-    # likuid (get_top_liquid_tickers di database.py), bukan seluruh
-    # universe (~550 ticker). Default DIKONSERVATIFKAN ke 30 (bukan
-    # asal tebak besar) karena kami tidak tahu persis angka kuota
-    # harian akun Anda -- cek sisa kuota di dashboard developer
-    # stock.arjum.com, lalu naikkan pelan-pelan lewat env var
-    # BROKER_SCAN_TOP_N di .github/workflows/daily_scan.yml kalau
-    # kuota memang longgar (TIDAK perlu ubah file .py ini).
-    broker_scan_top_n: int = 30
+    # Kuota harian gratis vendor terbatas -- get_signal_tickers_today()
+    # cuma ambil saham STRONG_BUY/BUY/WATCHLIST hari itu (bukan seluruh
+    # universe ~550 ticker), tapi tetap dibatasi angka ini sebagai
+    # pengaman kalau jumlah sinyal meledak di hari tertentu. Default
+    # DINAIKKAN 30->150 (v2.7.1) karena user eksplisit minta SEMUA
+    # saham bersinyal tercover, dan observasi 1 hari nyata sudah 98
+    # saham lolos WATCHLIST+ -- 150 kasih ruang lebih. TETAP cek sisa
+    # kuota di dashboard developer stock.arjum.com; turunkan lewat env
+    # var BROKER_SCAN_TOP_N di workflow (bukan edit .py) kalau kuota
+    # ternyata lebih kecil dari ini.
+    broker_scan_top_n: int = 150
 
 
 settings = Settings()

@@ -731,11 +731,9 @@ def get_broker_classification() -> dict[str, dict]:
 def get_top_liquid_tickers(n: int = 100) -> list[str]:
     """
     Ambil N ticker paling likuid (avg volume 20 hari tertinggi) dari
-    v_ticker_avg_volume_20d (migration 004). Dipakai cmd_broker_scan
-    supaya tidak boros quota API vendor broker summary dengan scan
-    seluruh universe (~550 ticker) yang sebagian besar jarang aktif.
-    Fallback: list kosong kalau view belum ada / gagal query (caller
-    WAJIB handle list kosong, jangan asumsikan selalu terisi).
+    v_ticker_avg_volume_20d (migration 004). TIDAK dipakai cmd_broker_scan
+    lagi sejak v2.7.1 (diganti get_signal_tickers_today, lihat AUDIT di
+    sana) -- dibiarkan tersedia sebagai utilitas untuk kebutuhan lain.
     """
     try:
         db = get_db()
@@ -752,3 +750,84 @@ def get_top_liquid_tickers(n: int = 100) -> list[str]:
         log = get_logger("database")
         log.error(f"Gagal ambil top liquid tickers: {e}")
         return []
+
+
+def get_signal_tickers_today(order_by_score: bool = True) -> list[str]:
+    """
+    Ambil ticker dari sinyal HARI INI dengan signal_type STRONG_BUY/BUY/
+    WATCHLIST -- basis scan broker_summary sejak v2.7.1 (SEBELUMNYA pakai
+    get_top_liquid_tickers/top-N generik, diganti atas permintaan user
+    supaya broker data fokus ke saham yang benar-benar jadi kandidat
+    sinyal, bukan saham likuid generik yang belum tentu relevan).
+
+    order_by_score=True: urutkan raw_score tertinggi dulu -- penting
+    karena cmd_broker_scan masih membatasi jumlah dgn broker_scan_top_n
+    (kuota vendor terbatas), jadi kalau jumlah sinyal > kuota, yang
+    paling berkualitas (skor tertinggi) yang diprioritaskan duluan.
+    """
+    try:
+        from datetime import date as _date
+        db = get_db()
+        today = _date.today().isoformat()
+        q = (
+            db.table("signals")
+            .select("ticker, raw_score")
+            .eq("signal_date", today)
+            .in_("signal_type", ["STRONG_BUY", "BUY", "WATCHLIST"])
+        )
+        if order_by_score:
+            q = q.order("raw_score", desc=True)
+        result = q.execute()
+        rows = result.data or []
+        # Dedup sambil pertahankan urutan (harusnya sudah unique per
+        # ticker/tanggal, tapi dijaga kalau-kalau ada duplikat data)
+        seen = set()
+        tickers = []
+        for r in rows:
+            t = r.get("ticker")
+            if t and t not in seen:
+                seen.add(t)
+                tickers.append(t)
+        return tickers
+    except Exception as e:
+        from src.core.logger import get_logger
+        log = get_logger("database")
+        log.error(f"Gagal ambil ticker sinyal hari ini: {e}")
+        return []
+
+
+def get_latest_signal_snapshot(tickers: list[str]) -> dict[str, dict]:
+    """
+    Ambil close_price/ema20 terbaru untuk sekumpulan ticker dari tabel
+    `signals` (sinyal terakhir yang tersimpan per ticker, TIDAK harus
+    hari ini persis -- reuse data yang sudah ada, bukan re-fetch harga
+    terpisah). Basis kolom "Harga"/"MA20" di fitur Net Buy Window.
+
+    Return: {ticker: {"close_price": .., "ema20": .., "signal_date": ..}}
+    Ticker yang tidak ketemu sinyal tersimpan TIDAK muncul di dict hasil
+    (caller wajib .get() dengan default, jangan asumsikan semua ticker
+    yang diminta pasti ada).
+    """
+    if not tickers:
+        return {}
+    try:
+        db = get_db()
+        result = (
+            db.table("signals")
+            .select("ticker, close_price, ema20, signal_date")
+            .in_("ticker", tickers)
+            .order("signal_date", desc=True)
+            .execute()
+        )
+        rows = result.data or []
+        snapshot: dict[str, dict] = {}
+        for r in rows:
+            t = r.get("ticker")
+            if t and t not in snapshot:   # baris pertama per ticker = signal_date terbaru (sudah di-order desc)
+                snapshot[t] = r
+        return snapshot
+    except Exception as e:
+        from src.core.logger import get_logger
+        log = get_logger("database")
+        log.error(f"Gagal ambil signal snapshot: {e}")
+        return {}

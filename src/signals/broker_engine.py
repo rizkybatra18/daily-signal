@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Optional
 
+import pandas as pd
+
 from src.core.logger import get_logger
 from src.core.database import get_db
 
@@ -279,4 +281,151 @@ def get_broker_footprint(ticker: str, broker_code: str, days: int = 60) -> list[
         return result.data or []
     except Exception as e:
         log.warning(f"Gagal ambil broker footprint {ticker}/{broker_code}: {e}")
+        return []
+
+
+# ══════════════════════════════════════════════════════════════════
+#  NET BUY WINDOW (BARU, ala NeoBDM)
+# ══════════════════════════════════════════════════════════════════
+
+def get_net_buy_window(
+    window_days: int = 3,
+    min_brokers: int = 3,
+    min_topn_net: float = 10_000_000,
+    top_n_brokers: int = 5,
+    limit: int = 20,
+) -> list[dict]:
+    """
+    "Net Buy Window" (ala NeoBDM) -- saham dengan akumulasi beli KOLEKTIF
+    oleh minimal `min_brokers` broker berbeda dalam `window_days` hari
+    PERDAGANGAN terakhir (bukan hari kalender -- weekend/tanggal kosong
+    di broker_summary otomatis dilompati), dengan Top-N Net (net value
+    gabungan broker akumulasi terbesar) >= min_topn_net.
+
+    CATATAN JUJUR SOAL METODOLOGI: definisi kolom di bawah adalah
+    REKONSTRUKSI kami sendiri dari deskripsi & tampilan referensi yang
+    diberikan user -- BUKAN salinan formula proprietary tool lain (kami
+    tidak punya akses ke source code/dokumentasi resminya). Logikanya
+    masuk akal & didokumentasikan penuh di sini, tapi angka PASTI bisa
+    beda dari tool manapun yang jadi referensi visual.
+
+    Definisi tiap kolom:
+      - top_brokers    : 3 kode broker akumulasi (net positif) terbesar
+      - topn_net       : jumlah net_value dari `top_n_brokers` broker
+                          akumulasi terbesar selama window
+      - topn_gross     : jumlah (buy_value+sell_value) broker2 itu --
+                          proxy "berapa besar transaksi yang terjadi",
+                          bukan cuma arah netnya
+      - buyer_share_pct: topn_net/topn_gross*100 -- makin dekat 100%,
+                          makin "bersih" akumulasinya (sedikit lawan jual
+                          dari broker2 yang sama)
+      - broker_concentration_pct: topn_gross / total gross SEMUA broker
+                          di saham itu selama window * 100 -- makin
+                          tinggi, makin terkonsentrasi di segelintir broker
+                          (bisa sinyal insider/smart money, bisa juga
+                          cuma saham tidak likuid -- perlu context lain)
+      - consistency_days: dari `window_days` hari, berapa hari net TOTAL
+                          saham itu (semua broker digabung) positif --
+                          proxy "akumulasi stabil" vs "cuma nyembur 1 hari"
+      - broker_count   : jumlah broker BERBEDA yang net-nya positif
+                          selama window (bisa lebih dari top_n_brokers)
+      - avg_net_per_broker: topn_net / broker_count
+
+    Diurutkan sesuai prioritas yang diminta: consistency_days DESC,
+    lalu broker_count/distribusi DESC, lalu buyer_share_pct/kualitas DESC.
+    """
+    try:
+        db = get_db()
+
+        latest = db.table("broker_summary").select("trade_date").order("trade_date", desc=True).limit(1).execute()
+        if not latest.data:
+            return []
+        latest_date = latest.data[0]["trade_date"]
+
+        # Cari window_days tanggal PERDAGANGAN unik terakhir (bukan window
+        # kalender) -- ambil histori mentah lumayan lebar (500 baris
+        # terbaru) buat nemu cukup tanggal unik walau ada gap data.
+        recent_dates_raw = (
+            db.table("broker_summary").select("trade_date")
+            .lte("trade_date", latest_date)
+            .order("trade_date", desc=True)
+            .limit(500)
+            .execute()
+        )
+        unique_dates = sorted({r["trade_date"] for r in (recent_dates_raw.data or [])}, reverse=True)
+        window_dates = unique_dates[:window_days]
+        if not window_dates:
+            return []
+        earliest_in_window = window_dates[-1]
+
+        raw = (
+            db.table("broker_summary")
+            .select("ticker, trade_date, broker_code, buy_value, sell_value, net_value")
+            .gte("trade_date", earliest_in_window)
+            .lte("trade_date", latest_date)
+            .execute()
+        )
+        rows = raw.data or []
+        if not rows:
+            return []
+
+        df = pd.DataFrame(rows)
+        df = df[df["trade_date"].isin(window_dates)]
+        if df.empty:
+            return []
+
+        for col in ["buy_value", "sell_value", "net_value"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        df["gross_value"] = df["buy_value"] + df["sell_value"]
+
+        results = []
+        for ticker, g in df.groupby("ticker"):
+            per_broker = g.groupby("broker_code").agg(
+                net_value=("net_value", "sum"),
+                gross_value=("gross_value", "sum"),
+            ).reset_index()
+
+            accumulating = per_broker[per_broker["net_value"] > 0].sort_values("net_value", ascending=False)
+            broker_count = len(accumulating)
+            if broker_count < min_brokers:
+                continue
+
+            top_n = accumulating.head(top_n_brokers)
+            topn_net = float(top_n["net_value"].sum())
+            if topn_net < min_topn_net:
+                continue
+            topn_gross = float(top_n["gross_value"].sum())
+            buyer_share = (topn_net / topn_gross * 100) if topn_gross > 0 else 0.0
+
+            total_gross_all = float(per_broker["gross_value"].sum())
+            broker_concentration = (topn_gross / total_gross_all * 100) if total_gross_all > 0 else 0.0
+
+            daily_net = g.groupby("trade_date")["net_value"].sum()
+            consistency_days = int((daily_net > 0).sum())
+
+            avg_net_per_broker = topn_net / broker_count if broker_count > 0 else 0.0
+
+            results.append({
+                "ticker": ticker,
+                "top_brokers": ",".join(top_n["broker_code"].head(3).tolist()),
+                "topn_net": round(topn_net, 2),
+                "topn_gross": round(topn_gross, 2),
+                "buyer_share_pct": round(buyer_share, 1),
+                "broker_concentration_pct": round(broker_concentration, 1),
+                "avg_net_per_broker": round(avg_net_per_broker, 2),
+                "broker_count": broker_count,
+                "consistency_days": consistency_days,
+                "window_days": len(window_dates),
+                "window_start": earliest_in_window,
+                "window_end": latest_date,
+            })
+
+        results.sort(
+            key=lambda r: (r["consistency_days"], r["broker_count"], r["buyer_share_pct"]),
+            reverse=True,
+        )
+        return results[:limit]
+
+    except Exception as e:
+        log.warning(f"Gagal hitung net buy window: {e}")
         return []

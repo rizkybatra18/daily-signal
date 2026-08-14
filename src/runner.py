@@ -112,12 +112,18 @@ def cmd_daily_scan(args):
 
 def cmd_broker_scan(args):
     """
-    Ambil broker summary hari ini untuk top-N saham (by liquidity) dan
-    simpan ke tabel broker_summary. Terpisah dari cmd_daily_scan supaya
-    bisa dimatikan lewat BROKER_SCAN_ENABLED tanpa menyentuh alur utama.
+    Ambil broker summary untuk saham yang masuk sinyal STRONG_BUY/BUY/
+    WATCHLIST hari ini dan simpan ke tabel broker_summary. Terpisah dari
+    cmd_daily_scan supaya bisa dimatikan lewat BROKER_SCAN_ENABLED tanpa
+    menyentuh alur utama.
 
-    BELUM AKTIF secara default (settings.broker_scan_enabled=False) --
-    provider konkret di src/providers/broker_data.py belum dipilih.
+    AUDIT (2026-08, v2.7.1): SEBELUMNYA scan top-N saham paling likuid
+    (get_top_liquid_tickers) -- diganti get_signal_tickers_today atas
+    permintaan user, supaya broker data fokus ke saham yang benar-benar
+    jadi kandidat sinyal (bukan saham likuid generik yang belum tentu
+    relevan). Tetap dibatasi broker_scan_top_n sebagai pengaman kuota
+    vendor -- kalau jumlah sinyal lebih banyak dari itu, yang raw_score
+    tertinggi diprioritaskan (lihat get_signal_tickers_today).
     """
     if not settings.broker_scan_enabled:
         log.info(
@@ -129,18 +135,26 @@ def cmd_broker_scan(args):
 
     from datetime import date as _date
     from src.providers.broker_data import BrokerDataProvider
-    from src.core.database import bulk_insert_broker_summary, get_top_liquid_tickers
+    from src.core.database import bulk_insert_broker_summary, get_signal_tickers_today
 
     log.info("▶ Menjalankan broker summary scan...")
     provider = BrokerDataProvider()
 
-    tickers = get_top_liquid_tickers(n=settings.broker_scan_top_n)
-    if not tickers:
+    all_signal_tickers = get_signal_tickers_today()
+    if not all_signal_tickers:
         log.warning(
-            "get_top_liquid_tickers() kosong (migration 004 belum dijalankan, "
-            "atau daily_prices belum cukup terisi). Broker scan dibatalkan."
+            "Tidak ada sinyal STRONG_BUY/BUY/WATCHLIST hari ini (atau "
+            "cmd_daily_scan belum jalan). Broker scan dibatalkan."
         )
         return
+
+    tickers = all_signal_tickers[: settings.broker_scan_top_n]
+    if len(all_signal_tickers) > len(tickers):
+        log.info(
+            f"{len(all_signal_tickers)} saham lolos sinyal hari ini, dibatasi ke "
+            f"{len(tickers)} (BROKER_SCAN_TOP_N={settings.broker_scan_top_n}, "
+            f"raw_score tertinggi diprioritaskan) -- hemat kuota vendor."
+        )
     today = _date.today()
 
     results = provider.fetch_batch(tickers, trade_date=today)

@@ -610,6 +610,23 @@ def load_broker_footprint(ticker, broker_code, days=60):
         return get_broker_footprint(ticker, broker_code, days=days)
     except: return []
 
+@st.cache_data(ttl=300)
+def load_net_buy_window(window_days=3, min_brokers=3, min_topn_net=10_000_000, limit=30):
+    try:
+        from src.signals.broker_engine import get_net_buy_window
+        return get_net_buy_window(
+            window_days=window_days, min_brokers=min_brokers,
+            min_topn_net=min_topn_net, limit=limit,
+        )
+    except: return []
+
+@st.cache_data(ttl=300)
+def load_signal_snapshot(tickers):
+    try:
+        from src.core.database import get_latest_signal_snapshot
+        return get_latest_signal_snapshot(tickers)
+    except: return {}
+
 @st.cache_data(ttl=180)
 def load_signal_results_all_closed():
     """Semua sinyal CLOSED/EXPIRED (tanpa batas hari) — untuk statistik jangka panjang."""
@@ -1761,11 +1778,76 @@ def page_broker_flow():
         )
         return
 
-    tab_screener, tab_detail, tab_stalker = st.tabs(
-        ["🏆 Top Akumulasi", "🔍 Detail Saham", "🕵️ Broker Stalker"]
+    tab_netbuy, tab_screener, tab_detail, tab_stalker = st.tabs(
+        ["📥 Net Buy Window", "🏆 Top Akumulasi", "🔍 Detail Saham", "🕵️ Broker Stalker"]
     )
 
-    # ── TAB 1: TOP AKUMULASI (screener) ──────────────────────────
+    # ── TAB 0: NET BUY WINDOW (BARU, ala NeoBDM) ─────────────────
+    with tab_netbuy:
+        st.markdown(
+            '<div class="ds-caption">Saham dengan akumulasi beli kolektif oleh banyak broker berbeda '
+            'dalam beberapa hari perdagangan terakhir — konsistensi &gt; distribusi broker &gt; kualitas akumulasi.</div>',
+            unsafe_allow_html=True
+        )
+        st.write("")
+        nc1, nc2, nc3 = st.columns(3)
+        with nc1:
+            nb_window = st.number_input("Window (hari perdagangan)", 2, 10, 3, key="nb_window")
+        with nc2:
+            nb_min_brokers = st.number_input("Min. broker akumulasi", 2, 10, 3, key="nb_min_brokers")
+        with nc3:
+            nb_min_net_m = st.number_input("Min. Top-N Net (juta Rp)", 1, 10000, 10, key="nb_min_net")
+
+        netbuy = load_net_buy_window(
+            window_days=nb_window, min_brokers=nb_min_brokers,
+            min_topn_net=nb_min_net_m * 1_000_000, limit=30
+        )
+
+        if not netbuy:
+            st.info(
+                "Tidak ada saham yang lolos kriteria ini dalam window waktu tersebut. "
+                "Coba longgarkan filter, atau tunggu broker_summary terisi lebih banyak hari."
+            )
+        else:
+            tickers_bare = [n["ticker"] for n in netbuy]
+            price_snap = load_signal_snapshot(tickers_bare)
+
+            nb_c1, nb_c2, nb_c3 = st.columns(3)
+            with nb_c1: st.markdown(tile("Saham Terdeteksi", str(len(netbuy))), unsafe_allow_html=True)
+            avg_buyer_share = sum(n["buyer_share_pct"] for n in netbuy) / len(netbuy)
+            with nb_c2: st.markdown(tile("Avg Buyer Share", f"{avg_buyer_share:.1f}%"), unsafe_allow_html=True)
+            with nb_c3: st.markdown(tile("Window", f"{netbuy[0]['window_start']} → {netbuy[0]['window_end']}"), unsafe_allow_html=True)
+            st.write("")
+
+            table_rows = []
+            for n in netbuy:
+                t = n["ticker"]
+                snap = price_snap.get(t, {})
+                close = sf(snap.get("close_price"))
+                ema20 = sf(snap.get("ema20"))
+                ma20_gap = ((close / ema20) - 1) * 100 if ema20 > 0 else 0
+                table_rows.append({
+                    "Symbol": t.replace(".JK", ""),
+                    "Harga": f"Rp{close:,.0f}" if close else "—",
+                    "MA20": f"{ma20_gap:+.2f}%" if ema20 else "—",
+                    "Top Brokers": n["top_brokers"],
+                    "Top-N Net": f"{n['topn_net']:,.0f}",
+                    "Top-N Gross": f"{n['topn_gross']:,.0f}",
+                    "Buyer Share": f"{n['buyer_share_pct']:.1f}%",
+                    "Broker Conc.": f"{n['broker_concentration_pct']:.1f}%",
+                    "Avg Net/Broker": f"{n['avg_net_per_broker']:,.0f}",
+                    "Konsistensi": f"{n['consistency_days']}/{n['window_days']}d",
+                    "Broker Cnt": n["broker_count"],
+                })
+            nb_df = pd.DataFrame(table_rows)
+            st.dataframe(nb_df, use_container_width=True, hide_index=True, height=min(60 + 35 * len(nb_df), 600))
+            st.caption(
+                "Metodologi rekonstruksi sendiri (bukan salinan formula tool lain) — lihat docstring "
+                "get_net_buy_window() di broker_engine.py untuk definisi lengkap tiap kolom. "
+                "Diurutkan: konsistensi hari akumulasi → jumlah broker → kualitas (buyer share)."
+            )
+
+    # ── TAB 1: TOP AKUMULASI (screener harian) ───────────────────
     with tab_screener:
         min_streak = st.slider(
             "Minimal streak akumulasi berturut (hari)", 0, 10, 0,

@@ -32,7 +32,7 @@ dan set BROKER_DATA_PROVIDER di .env ke nama vendor tsb.
 import time
 import threading
 from abc import ABC, abstractmethod
-from datetime import date
+from datetime import date, timedelta as _timedelta
 from typing import Optional
 
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -175,66 +175,96 @@ class ArjumIdxEdgeProvider(BaseBrokerDataProvider):
             self._last_call = time.time()
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def fetch_broker_summary(self, ticker: str, trade_date: date) -> Optional[list[dict]]:
+    def _fetch_one_date(self, code: str, date_str: str) -> Optional[dict]:
+        """Satu request mentah ke vendor untuk 1 tanggal spesifik. Return payload JSON atau None kalau kosong."""
         import requests
 
         self._throttle()
-
-        code = ticker.replace(".JK", "")
-        date_str = trade_date.isoformat()
         url = f"{self.BASE_URL}/{code}"
         params = {
             "start_date": date_str,
-            "end_date": date_str,     # start=end=1 hari spesifik -- granularitas harian,
-                                        # BUKAN aggregate range (API ini support range juga,
-                                        # tapi kita butuh 1 baris per hari per broker).
-            "net": "false",             # false = tetap kasih bval/sval, bukan cuma net
-            "broker_limit": 30,         # sedikit di atas default vendor (20) -- cakupan
-                                        # broker lebih luas tanpa all_data=true (lebih hemat)
+            "end_date": date_str,
+            "net": "false",
+            "broker_limit": 30,
             "level_limit": 25,
             "all_data": "false",
             "flow": "all",
         }
-        headers = {
-            "X-API-Key": self.api_key,
-            "Accept": "application/json",
-        }
+        headers = {"X-API-Key": self.api_key, "Accept": "application/json"}
 
         resp = requests.get(url, params=params, headers=headers, timeout=15)
 
-        if resp.status_code == 401 or resp.status_code == 403:
+        if resp.status_code in (401, 403):
             # API key salah/expired -- jangan retry (percuma), gagal jelas
             raise EnvironmentError(
                 f"IDX Edge PRO menolak API key (HTTP {resp.status_code}). "
                 "Cek ARJUM_IDX_EDGE_API_KEY di .env."
             )
         resp.raise_for_status()
-
         payload = resp.json()
-        brokers = payload.get("brokers", [])
-        if not brokers:
-            return None
+        return payload if payload.get("brokers") else None
 
-        rows = []
-        for b in brokers:
-            broker_code = b.get("broker_code")
-            if not broker_code:
+    def fetch_broker_summary(self, ticker: str, trade_date: date) -> Optional[list[dict]]:
+        """
+        AUDIT (2026-08, bug ditemukan dari laporan user: broker_summary
+        selalu 0 baris walau scan "sukses"): request awal SELALU minta
+        start_date=end_date=trade_date (biasanya "hari ini", karena
+        cmd_broker_scan jalan tiap sore lewat cron 17:18 WIB). Vendor
+        ternyata BELUM TENTU sudah publish data broker untuk tanggal
+        yang sama hari itu (lag publikasi tidak didokumentasikan resmi
+        di API-nya) -- hasilnya `brokers: []` KOSONG, bukan error, jadi
+        lolos begitu saja tanpa exception dan tercatat "0 baris" tanpa
+        penjelasan.
+
+        Diperbaiki: kalau tanggal yang diminta kosong, MUNDUR sampai 5
+        hari kalender ke belakang (cukup buat lewati weekend + 1-2 hari
+        lag), pakai tanggal PERTAMA yang beneran ada datanya. Baris
+        disimpan dengan trade_date dari vendor (broker_end/latest_date
+        di response), BUKAN trade_date yang awalnya diminta -- supaya
+        akurat kalau ternyata mundur beberapa hari.
+        """
+        code = ticker.replace(".JK", "")
+        max_lookback_days = 5
+
+        for offset in range(max_lookback_days):
+            try_date = trade_date - _timedelta(days=offset)
+            try:
+                payload = self._fetch_one_date(code, try_date.isoformat())
+            except EnvironmentError:
+                raise  # API key salah -- jangan buang waktu mundur-mundur, langsung gagal
+            except Exception as e:
+                log.warning(f"Fetch {ticker} tanggal {try_date} gagal: {e}")
                 continue
-            rows.append({
-                "ticker": ticker,
-                "trade_date": date_str,
-                "broker_code": broker_code,
-                "broker_name": b.get("broker_name"),
-                "buy_value": b.get("bval", 0) or 0,
-                "sell_value": b.get("sval", 0) or 0,
-                "net_value": b.get("nval"),
-                "net_volume": b.get("nvol"),
-                "buy_frequency": b.get("bfrq"),
-                "sell_frequency": b.get("sfrq"),
-                "source_provider": "arjum_idx_edge",
-            })
 
-        return rows if rows else None
+            if payload:
+                actual_date = payload.get("broker_end") or payload.get("latest_date") or try_date.isoformat()
+                if offset > 0:
+                    log.info(
+                        f"{ticker}: data {trade_date.isoformat()} belum terbit, "
+                        f"mundur ke {actual_date} (offset {offset} hari)."
+                    )
+                rows = []
+                for b in payload.get("brokers", []):
+                    broker_code = b.get("broker_code")
+                    if not broker_code:
+                        continue
+                    rows.append({
+                        "ticker": ticker,
+                        "trade_date": actual_date,
+                        "broker_code": broker_code,
+                        "broker_name": b.get("broker_name"),
+                        "buy_value": b.get("bval", 0) or 0,
+                        "sell_value": b.get("sval", 0) or 0,
+                        "net_value": b.get("nval"),
+                        "net_volume": b.get("nvol"),
+                        "buy_frequency": b.get("bfrq"),
+                        "sell_frequency": b.get("sfrq"),
+                        "source_provider": "arjum_idx_edge",
+                    })
+                return rows if rows else None
+
+        log.warning(f"{ticker}: tidak ada data broker summary dalam {max_lookback_days} hari terakhir.")
+        return None
 
 
 # ── Provider Factory ─────────────────────────────────────────────────

@@ -2,6 +2,51 @@
 
 ---
 
+## v2.7.1 — Fix Root Cause 0-Data, Net Buy Window, Scan Berbasis Sinyal (2026-08)
+
+### 🐛 Root cause "broker_summary selalu 0 baris walau scan sukses"
+User lapor: workflow "Broker Scan" sukses (log hijau, 19s) tapi hasilnya
+"0/30 ticker, 0 baris broker_summary". Ditemukan: `ArjumIdxEdgeProvider`
+selalu minta `start_date=end_date=hari-ini` (scan jalan 17:18 WIB, tepat
+setelah tutup pasar) -- vendor kemungkinan besar BELUM publish data
+broker untuk tanggal yang sama hari itu (lag publikasi tidak
+didokumentasikan resmi), hasilnya `brokers: []` KOSONG (bukan error),
+jadi lolos tanpa exception dan tercatat "0 baris" tanpa penjelasan.
+
+**Diperbaiki**: `fetch_broker_summary()` sekarang mundur otomatis
+sampai 5 hari kalender ke belakang kalau tanggal yang diminta kosong,
+dan menyimpan `trade_date` dari RESPONSE vendor (`broker_end`/
+`latest_date`), bukan tanggal yang awalnya diminta. Dibuktikan dengan
+test: skenario "hari ini kosong, kemarin ada" sekarang otomatis mundur
+& simpan tanggal yang benar.
+
+### ✨ Sumber ticker broker scan: sinyal, bukan lagi "top likuid generik"
+Atas permintaan user eksplisit ("semua saham yang masuk sinyal strong
+buy/buy/watchlist") -- `cmd_broker_scan` diganti dari
+`get_top_liquid_tickers()` (top-N by volume, generik) ke
+`get_signal_tickers_today()` (BARU, ambil dari `signals` table hari
+itu, filter STRONG_BUY/BUY/WATCHLIST, urut raw_score tertinggi kalau
+dibatasi kuota). `broker_scan_top_n` default dinaikkan 30→150
+(observasi nyata: 98 saham lolos WATCHLIST+ dalam 1 hari).
+
+### ✨ Net Buy Window (BARU, ala referensi visual user)
+`get_net_buy_window()` di `broker_engine.py` + tab baru di halaman
+Broker Flow. Saham dengan akumulasi beli kolektif ≥ N broker berbeda
+dalam window hari perdagangan terakhir (bukan kalender), threshold
+Top-N Net configurable (default 10 juta), diurutkan konsistensi →
+distribusi broker → kualitas akumulasi (buyer share). Filter (window,
+min broker, min net) bisa diatur langsung dari UI.
+
+**Catatan metodologi jujur**: definisi kolom (Top-N Net/Gross, Buyer
+Share, Broker Concentration, dst) adalah rekonstruksi sendiri dari
+deskripsi & tampilan referensi yang diberikan user -- BUKAN salinan
+formula proprietary tool lain (tidak ada akses ke source/dokumentasi
+resminya). Diuji dengan data tiruan 3 saham (1 lolos filter, 2
+sengaja didesain untuk kefilter) -- semua assert lolos termasuk
+exclude broker distributor dari agregasi akumulasi.
+
+---
+
 ## v2.7.0 — Wiring CI/CD, Seed 93 Broker, Chart Jejak Broker (2026-08)
 
 ### 🐛 Root cause broker_summary kosong walau sudah deploy
