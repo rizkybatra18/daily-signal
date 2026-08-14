@@ -51,10 +51,13 @@ jobs:
       BROKER_DATA_PROVIDER: arjum_idx_edge
       BROKER_SCAN_ENABLED: "true"
       ARJUM_IDX_EDGE_API_KEY: ${{ secrets.ARJUM_IDX_EDGE_API_KEY }}
-      # Berapa saham paling likuid yang di-scan tiap hari -- naikkan di
-      # sini (BUKAN di kode .py) kalau kuota harian vendor Anda longgar.
-      # Default konservatif (30) supaya aman untuk kuota gratis standar.
-      BROKER_SCAN_TOP_N: "30"
+      # Berapa saham (dari sinyal STRONG_BUY/BUY/WATCHLIST hari itu, lihat
+      # get_signal_tickers_today di database.py) yang di-scan broker
+      # summary-nya. Naikkan/turunkan di sini (BUKAN di kode .py) sesuai
+      # kuota harian vendor Anda -- 150 kasih ruang untuk hari dengan
+      # banyak sinyal (observasi nyata: 98 saham lolos WATCHLIST+ dalam
+      # 1 hari), turunkan kalau kuota vendor ternyata lebih kecil.
+      BROKER_SCAN_TOP_N: "150"
 
     steps:
       - uses: actions/checkout@v4
