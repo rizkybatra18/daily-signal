@@ -2,6 +2,47 @@
 
 ---
 
+## v2.7.0 — Wiring CI/CD, Seed 93 Broker, Chart Jejak Broker (2026-08)
+
+### 🐛 Root cause broker_summary kosong walau sudah deploy
+User lapor tabel `broker_summary` kosong setelah deploy v2.6.1. Ditemukan:
+`cmd_broker_scan` yang dibuat di v2.4.0 **TIDAK PERNAH dipanggil** di
+workflow GitHub Actions manapun -- ada command-nya, tapi tidak ada yang
+menjalankannya. Bukan kesalahan user. Diperbaiki: `daily_scan.yml`
+sekarang punya step `🕵️ Broker Scan (Bandarmologi)` setelah daily scan
+utama (`continue-on-error: true` -- kalau kuota vendor habis/API down,
+tidak menggagalkan pipeline utama).
+
+### ⚙️ Siap pakai tanpa edit kode (sesuai permintaan user)
+`BROKER_DATA_PROVIDER`, `BROKER_SCAN_ENABLED`, `BROKER_SCAN_TOP_N`
+ditulis langsung sebagai env value di `daily_scan.yml` (bukan lewat
+secrets, karena bukan data sensitif) -- user cuma perlu pastikan
+`ARJUM_IDX_EDGE_API_KEY` ada di GitHub Secrets (sudah dilakukan user).
+**Asumsi nama secret**: `ARJUM_IDX_EDGE_API_KEY` -- kalau nama secret
+user berbeda, satu-satunya baris yang perlu disesuaikan manual.
+
+`broker_scan_top_n` default DITURUNKAN 100 → 30 (konservatif) karena
+kuota harian gratis vendor tidak diketahui pasti -- naikkan lewat env
+var `BROKER_SCAN_TOP_N` di workflow (bukan edit .py) kalau kuota
+ternyata longgar.
+
+### 🗂️ Migration 007: Seed 93 Broker Indonesia
+`broker_classification` sebelumnya cuma 11 kode contoh, sekarang 93
+broker (seluruh anggota bursa aktif per data publik, Agustus 2023).
+Sumber: artikel Bisnis.com -- BUKAN scraping idx.co.id langsung
+(konsisten dengan kebijakan yang sudah diaudit). Klasifikasi ASING/
+DOMESTIK/BUMN estimasi dari kepemilikan yang umum diketahui, ditandai
+"VERIFIKASI" di notes untuk ~5 entri yang genuinely ambigu (JV, M&A
+terbaru) -- **bukan sumber otoritatif, perlu verifikasi berkala**.
+
+### ✨ Chart Jejak Broker (BARU) -- disambungkan ke UI
+`get_broker_footprint()` (sudah ada sejak v2.6.1, belum pernah
+disambungkan) sekarang punya UI di tab Broker Stalker: pilih saham dari
+hasil aktivitas broker, lihat chart net value harian + kumulatif
+sepanjang rentang waktu yang dipilih (10-180 hari).
+
+---
+
 ## v2.6.1 — Fitur ala NeoBDM: Broker Stalker & Ringkasan Broker Lengkap (2026-08)
 
 ### ✨ Fitur baru di broker_engine.py + halaman Broker Flow

@@ -153,9 +153,13 @@ class Settings(BaseSettings):
     broker_scan_enabled: bool = False
     # Kuota harian gratis vendor terbatas -- cuma scan N saham paling
     # likuid (get_top_liquid_tickers di database.py), bukan seluruh
-    # universe (~550 ticker). Naikkan pelan-pelan sambil pantau kuota
-    # tersisa di dashboard developer vendor, jangan langsung dimaksimalkan.
-    broker_scan_top_n: int = 100
+    # universe (~550 ticker). Default DIKONSERVATIFKAN ke 30 (bukan
+    # asal tebak besar) karena kami tidak tahu persis angka kuota
+    # harian akun Anda -- cek sisa kuota di dashboard developer
+    # stock.arjum.com, lalu naikkan pelan-pelan lewat env var
+    # BROKER_SCAN_TOP_N di .github/workflows/daily_scan.yml kalau
+    # kuota memang longgar (TIDAK perlu ubah file .py ini).
+    broker_scan_top_n: int = 30
 
 
 settings = Settings()

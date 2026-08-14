@@ -603,6 +603,13 @@ def load_broker_stalker(broker_code, limit=20):
         return get_broker_stalker(broker_code, limit=limit)
     except: return []
 
+@st.cache_data(ttl=300)
+def load_broker_footprint(ticker, broker_code, days=60):
+    try:
+        from src.signals.broker_engine import get_broker_footprint
+        return get_broker_footprint(ticker, broker_code, days=days)
+    except: return []
+
 @st.cache_data(ttl=180)
 def load_signal_results_all_closed():
     """Semua sinyal CLOSED/EXPIRED (tanpa batas hari) — untuk statistik jangka panjang."""
@@ -1900,6 +1907,44 @@ def page_broker_flow():
                         f'</div></div>',
                         unsafe_allow_html=True
                     )
+
+                # ── Jejak Broker (BARU) -- histori 1 broker di 1 saham ──
+                section("JEJAK BROKER (histori per saham)", "📈")
+                footprint_tickers = sdf["ticker"].tolist()
+                footprint_ticker = st.selectbox(
+                    f"Lihat jejak {broker_code} di saham mana?", footprint_tickers,
+                    key="broker_footprint_ticker"
+                )
+                footprint_days = st.slider("Rentang hari", 10, 180, 60, key="broker_footprint_days")
+                if footprint_ticker:
+                    footprint = load_broker_footprint(footprint_ticker, broker_code, days=footprint_days)
+                    if footprint and len(footprint) >= 2:
+                        fpdf = pd.DataFrame(footprint).sort_values("trade_date")
+                        fpdf["cum_net_value"] = fpdf["net_value"].apply(sf).cumsum()
+
+                        fig_fp = go.Figure()
+                        fig_fp.add_trace(go.Bar(
+                            x=fpdf["trade_date"], y=fpdf["net_value"],
+                            marker_color=[("#00c896" if v > 0 else "#f87171") for v in fpdf["net_value"]],
+                            name="Net Value Harian", yaxis="y1"
+                        ))
+                        fig_fp.add_trace(go.Scatter(
+                            x=fpdf["trade_date"], y=fpdf["cum_net_value"],
+                            mode="lines", name="Kumulatif", line=dict(color="#fbbf24", width=2),
+                            yaxis="y1"
+                        ))
+                        fig_fp.update_layout(
+                            title=f"Jejak {broker_code} di {footprint_ticker} ({footprint_days} hari)",
+                            height=340, **LAYOUT,
+                            legend=dict(orientation="h", y=1.1)
+                        )
+                        st.plotly_chart(fig_fp, use_container_width=True)
+                        st.caption(
+                            "Batang = net value harian broker ini di saham ini. Garis kuning = "
+                            "akumulasi kumulatif sepanjang rentang waktu yang dipilih."
+                        )
+                    else:
+                        st.caption(f"Belum cukup histori {broker_code} di {footprint_ticker} untuk digambar (minimal 2 hari data).")
 
 
 # ══════════════════════════════════════════════════════════════════
