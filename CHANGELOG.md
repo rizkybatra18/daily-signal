@@ -2,6 +2,63 @@
 
 ---
 
+## v2.7.2 — Fix Formula Net Buy Window, Chart Candlestick + Zona Akumulasi/Distribusi (2026-08)
+
+### 🎯 Latar belakang
+User awalnya minta hapus Net Buy Window (dianggap kurang maksimal),
+lalu membatalkan itu dan minta disempurnakan sesuai referensi visual
+detail ("Table Field Reference") yang diberikan. Sekaligus lanjutan
+permintaan rombak dashboard: chart candlestick dengan identifikasi
+zona akumulasi/distribusi.
+
+### 🐛 Bug formula Net Buy Window diperbaiki (v1 → v2)
+Dua kolom di v1 (v2.7.1) ternyata tidak sesuai definisi yang dimaksud
+user setelah dibandingkan dengan referensi detail:
+- **Broker Concentration**: v1 pakai `topn_gross/total_market_gross`
+  (top-N vs SELURUH broker di saham itu). Definisi yang benar: dominasi
+  broker TERBESAR terhadap total net buy KANDIDAT (`broker_terbesar_net
+  / topn_net`) -- rendah = akumulasi lebih sehat & menyebar, TIDAK
+  didominasi 1 broker.
+- **Avg Net/Broker**: v1 bagi `topn_net` (cuma top-N) dengan
+  `broker_count` (SEMUA broker akumulasi, bisa > N) -- tidak konsisten.
+  Diperbaiki: dibagi jumlah broker yang SAMA dipakai menghitung topn_net.
+
+Ditambah: kolom `dominant_broker` per saham + statistik header "Broker
+Dominan (unik)" (jumlah broker berbeda yang jadi #1 di seluruh saham
+terdeteksi), dan kotak "Table Field Reference" di UI persis seperti
+referensi visual user. Diuji ulang dengan data tiruan -- assert lolos
+untuk formula baru.
+
+### ✨ Chart Candlestick + Zona Akumulasi/Distribusi (BARU)
+Permintaan inti dari rombak dashboard: tab "Detail Saham" di halaman
+Broker Flow sekarang punya chart candlestick (OHLCV dari daily_prices)
++ volume bar, dengan overlay kotak zona akumulasi/distribusi ala
+referensi visual ("AKUMULASI + SMART MONEY").
+
+`get_accumulation_distribution_zones()` (BARU, broker_engine.py):
+kelompokkan hari-hari perdagangan BERTURUT-TURUT dengan net flow
+broker searah jadi satu zona, buang zona <2 hari (noise), cari broker
+paling dominan per zona untuk label. **HEURISTIK sederhana** (streak
+net searah) -- BUKAN analisis Wyckoff formal, didokumentasikan jujur
+di docstring.
+
+**Bug ditemukan & diperbaiki sebelum sempat dikirim**: logic
+penggabungan zona SEMPAT membuang zona yang sedang terbentuk begitu
+ketemu 1 hari netral di tengah (reset tanpa simpan dulu) -- ketahuan
+dari test sendiri sebelum dikirim ke user, bukan dari laporan bug.
+
+### ⚠️ Scope yang BELUM dikerjakan (dari permintaan "rombak total dashboard")
+User awalnya minta rombak TOTAL tampilan dashboard jadi gaya terminal
+trading profesional (referensi: dark theme ala Bloomberg terminal,
+nav F-key, panel live order book). Yang SUDAH dikerjakan: chart
+candlestick + zona akumulasi/distribusi (inti fungsional). Yang BELUM:
+overhaul tema visual menyeluruh (CSS/layout semua halaman), dan panel
+order book/bid-ask real-time TIDAK BISA dibuat sama sekali -- itu data
+Level-2 real-time, beda total dari sumber data kita (Yahoo Finance EOD
++ broker summary harian), butuh vendor data lain yang jauh lebih mahal.
+
+---
+
 ## v2.7.1 — Fix Root Cause 0-Data, Net Buy Window, Scan Berbasis Sinyal (2026-08)
 
 ### 🐛 Root cause "broker_summary selalu 0 baris walau scan sukses"

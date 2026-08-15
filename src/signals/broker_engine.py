@@ -302,34 +302,50 @@ def get_net_buy_window(
     di broker_summary otomatis dilompati), dengan Top-N Net (net value
     gabungan broker akumulasi terbesar) >= min_topn_net.
 
-    CATATAN JUJUR SOAL METODOLOGI: definisi kolom di bawah adalah
-    REKONSTRUKSI kami sendiri dari deskripsi & tampilan referensi yang
-    diberikan user -- BUKAN salinan formula proprietary tool lain (kami
-    tidak punya akses ke source code/dokumentasi resminya). Logikanya
-    masuk akal & didokumentasikan penuh di sini, tapi angka PASTI bisa
-    beda dari tool manapun yang jadi referensi visual.
-
-    Definisi tiap kolom:
+    Definisi tiap kolom (v2, 2026-08 -- disesuaikan PERSIS dengan
+    referensi "Table Field Reference" yang diberikan user; v1 sebelumnya
+    salah untuk broker_concentration & avg_net_per_broker, lihat AUDIT
+    di bawah):
       - top_brokers    : 3 kode broker akumulasi (net positif) terbesar
+      - dominant_broker: 1 kode broker akumulasi TERBESAR (buat statistik
+                          agregat "Broker Dominan" di level halaman)
       - topn_net       : jumlah net_value dari `top_n_brokers` broker
-                          akumulasi terbesar selama window
-      - topn_gross     : jumlah (buy_value+sell_value) broker2 itu --
-                          proxy "berapa besar transaksi yang terjadi",
-                          bukan cuma arah netnya
-      - buyer_share_pct: topn_net/topn_gross*100 -- makin dekat 100%,
-                          makin "bersih" akumulasinya (sedikit lawan jual
-                          dari broker2 yang sama)
-      - broker_concentration_pct: topn_gross / total gross SEMUA broker
-                          di saham itu selama window * 100 -- makin
-                          tinggi, makin terkonsentrasi di segelintir broker
-                          (bisa sinyal insider/smart money, bisa juga
-                          cuma saham tidak likuid -- perlu context lain)
-      - consistency_days: dari `window_days` hari, berapa hari net TOTAL
-                          saham itu (semua broker digabung) positif --
-                          proxy "akumulasi stabil" vs "cuma nyembur 1 hari"
+                          akumulasi terbesar selama window ("power akumulasi")
+      - topn_gross     : jumlah (buy_value+sell_value) broker2 itu
+                          ("pembanding intensitas")
+      - buyer_share_pct: topn_net/topn_gross*100 -- "rasio kekuatan beli
+                          bersih terhadap total aktivitas broker kandidat".
+                          Mendekati 100% = dominasi net buy (sedikit jual
+                          balik dari broker yang sama)
+      - broker_concentration_pct: net_value broker TERBESAR / topn_net * 100
+                          -- "persentase dominasi broker terbesar terhadap
+                          total net buy". RENDAH = akumulasi lebih sehat &
+                          menyebar ke banyak broker, TINGGI = didominasi
+                          1 broker (bisa 1 whale, bukan konsensus banyak
+                          pihak -- beda konsep dari buyer_share_pct)
+      - avg_net_per_broker: topn_net / jumlah broker YANG DIPAKAI hitung
+                          topn_net (bukan broker_count total, biar
+                          konsisten dgn pembilangnya) -- "kedalaman
+                          komitmen, bukan sekadar partisipasi"
       - broker_count   : jumlah broker BERBEDA yang net-nya positif
-                          selama window (bisa lebih dari top_n_brokers)
-      - avg_net_per_broker: topn_net / broker_count
+                          selama window (BISA lebih dari top_n_brokers)
+                          -- "validasi distribusi, hindari single-broker push"
+      - consistency_days: dari `window_days` hari, berapa hari net TOTAL
+                          saham itu (semua broker digabung) positif
+
+    AUDIT (2026-08): v1 broker_concentration_pct pakai formula BEDA
+    (topn_gross/total_market_gross -- "seberapa besar top-N vs SELURUH
+    broker di saham itu") dari yang dimaksud user (dominasi broker
+    TERBESAR vs total net buy KANDIDAT). Diperbaiki ke formula yang
+    benar. avg_net_per_broker v1 juga tidak konsisten (pembilang topn_net
+    cuma dari top-N, pembilang broker_count bisa lebih besar dari N) --
+    diperbaiki jadi konsisten pakai jumlah broker yang SAMA dgn pembilang.
+
+    CATATAN JUJUR SOAL METODOLOGI: meski sudah disesuaikan definisi
+    tertulisnya, ini tetap REKONSTRUKSI dari deskripsi teks -- BUKAN
+    salinan source code proprietary tool manapun. Diuji dengan data
+    tiruan (lihat test di riwayat percakapan), tapi TIDAK divalidasi
+    silang langsung terhadap tool referensi.
 
     Diurutkan sesuai prioritas yang diminta: consistency_days DESC,
     lalu broker_count/distribusi DESC, lalu buyer_share_pct/kualitas DESC.
@@ -391,23 +407,31 @@ def get_net_buy_window(
                 continue
 
             top_n = accumulating.head(top_n_brokers)
+            n_used = len(top_n)
             topn_net = float(top_n["net_value"].sum())
             if topn_net < min_topn_net:
                 continue
             topn_gross = float(top_n["gross_value"].sum())
             buyer_share = (topn_net / topn_gross * 100) if topn_gross > 0 else 0.0
 
-            total_gross_all = float(per_broker["gross_value"].sum())
-            broker_concentration = (topn_gross / total_gross_all * 100) if total_gross_all > 0 else 0.0
+            # broker_concentration: dominasi broker TERBESAR terhadap total
+            # net buy kandidat (BUKAN top-N gross vs total market gross --
+            # lihat AUDIT di docstring). Rendah = sehat/menyebar.
+            largest_broker_net = float(top_n["net_value"].iloc[0])
+            broker_concentration = (largest_broker_net / topn_net * 100) if topn_net > 0 else 0.0
 
             daily_net = g.groupby("trade_date")["net_value"].sum()
             consistency_days = int((daily_net > 0).sum())
 
-            avg_net_per_broker = topn_net / broker_count if broker_count > 0 else 0.0
+            # avg_net_per_broker: dibagi jumlah broker yang SAMA dgn yang
+            # dijumlah di topn_net (n_used), bukan broker_count total --
+            # supaya konsisten & tidak menyesatkan kalau broker_count > N.
+            avg_net_per_broker = topn_net / n_used if n_used > 0 else 0.0
 
             results.append({
                 "ticker": ticker,
                 "top_brokers": ",".join(top_n["broker_code"].head(3).tolist()),
+                "dominant_broker": str(top_n["broker_code"].iloc[0]),
                 "topn_net": round(topn_net, 2),
                 "topn_gross": round(topn_gross, 2),
                 "buyer_share_pct": round(buyer_share, 1),
@@ -428,4 +452,118 @@ def get_net_buy_window(
 
     except Exception as e:
         log.warning(f"Gagal hitung net buy window: {e}")
+        return []
+
+
+# ══════════════════════════════════════════════════════════════════
+#  ZONA AKUMULASI/DISTRIBUSI (BARU) -- overlay chart candlestick
+# ══════════════════════════════════════════════════════════════════
+
+def get_accumulation_distribution_zones(
+    ticker: str,
+    days: int = 90,
+    min_zone_days: int = 2,
+) -> list[dict]:
+    """
+    Kelompokkan hari-hari perdagangan BERTURUT-TURUT dengan net flow
+    broker yang searah (net TOTAL positif = akumulasi, negatif =
+    distribusi) jadi "zona" -- basis overlay kotak di chart candlestick
+    (ala anotasi "AKUMULASI + SMART MONEY" di referensi visual).
+
+    Zona dengan panjang < min_zone_days DIBUANG -- 1 hari nyembur bukan
+    pola berkelanjutan, cuma noise kalau ditampilkan sebagai zona.
+
+    HEURISTIK SEDERHANA -- bukan analisis Wyckoff formal (fase
+    accumulation/markup/distribution/markdown yang sesungguhnya perlu
+    analisis volume-price-range yang jauh lebih kompleks). Ini murni
+    "berapa hari berturut-turut net broker searah", proxy kasar tapi
+    transparan & mudah diverifikasi manual dari datanya.
+    """
+    try:
+        db = get_db()
+        since = (date.today() - timedelta(days=days)).isoformat()
+
+        daily_result = (
+            db.table("v_broker_net_flow_daily")
+            .select("trade_date, total_net_value")
+            .eq("ticker", ticker)
+            .gte("trade_date", since)
+            .order("trade_date")
+            .execute()
+        )
+        daily_rows = daily_result.data or []
+        if not daily_rows:
+            return []
+
+        raw_result = (
+            db.table("broker_summary")
+            .select("trade_date, broker_code, net_value")
+            .eq("ticker", ticker)
+            .gte("trade_date", since)
+            .execute()
+        )
+        raw_rows = raw_result.data or []
+        raw_df = pd.DataFrame(raw_rows) if raw_rows else pd.DataFrame(columns=["trade_date", "broker_code", "net_value"])
+        if not raw_df.empty:
+            raw_df["net_value"] = pd.to_numeric(raw_df["net_value"], errors="coerce").fillna(0)
+
+        classified = []
+        for r in daily_rows:
+            net = float(r.get("total_net_value") or 0)
+            cls = "AKUMULASI" if net > 0 else ("DISTRIBUSI" if net < 0 else "NETRAL")
+            classified.append({"trade_date": r["trade_date"], "net_value": net, "cls": cls})
+
+        zones = []
+        current = None
+        for row in classified:
+            if row["cls"] == "NETRAL":
+                # AUDIT (bug ditemukan via test): SEBELUMNYA reset current=None
+                # di sini TANPA menyimpan zona yang sudah terbentuk ke `zones`
+                # dulu -- zona yang sedang berjalan HILANG begitu ketemu 1 hari
+                # netral di tengah. Diperbaiki: simpan dulu kalau ada.
+                if current:
+                    zones.append(current)
+                current = None
+                continue
+            if current and current["cls"] == row["cls"]:
+                current["end_date"] = row["trade_date"]
+                current["total_net"] += row["net_value"]
+                current["days"].append(row["trade_date"])
+            else:
+                if current:
+                    zones.append(current)
+                current = {
+                    "cls": row["cls"], "start_date": row["trade_date"],
+                    "end_date": row["trade_date"], "total_net": row["net_value"],
+                    "days": [row["trade_date"]],
+                }
+        if current:
+            zones.append(current)
+
+        result_zones = []
+        for z in zones:
+            if len(z["days"]) < min_zone_days:
+                continue
+
+            dominant = None
+            if not raw_df.empty:
+                zone_df = raw_df[raw_df["trade_date"].isin(z["days"])]
+                if not zone_df.empty:
+                    per_broker = zone_df.groupby("broker_code")["net_value"].sum()
+                    if len(per_broker):
+                        dominant = str(per_broker.idxmax() if z["cls"] == "AKUMULASI" else per_broker.idxmin())
+
+            result_zones.append({
+                "zone_type": z["cls"],
+                "start_date": z["start_date"],
+                "end_date": z["end_date"],
+                "total_net_value": round(z["total_net"], 2),
+                "trading_days": len(z["days"]),
+                "dominant_broker": dominant,
+            })
+
+        return result_zones
+
+    except Exception as e:
+        log.warning(f"Gagal hitung accumulation/distribution zones {ticker}: {e}")
         return []

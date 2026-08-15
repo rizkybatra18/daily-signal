@@ -22,6 +22,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
+from plotly.subplots import make_subplots
 from datetime import date, timedelta, datetime
 import pytz
 
@@ -619,6 +620,20 @@ def load_net_buy_window(window_days=3, min_brokers=3, min_topn_net=10_000_000, l
             min_topn_net=min_topn_net, limit=limit,
         )
     except: return []
+
+@st.cache_data(ttl=300)
+def load_accumulation_zones(ticker, days=90):
+    try:
+        from src.signals.broker_engine import get_accumulation_distribution_zones
+        return get_accumulation_distribution_zones(ticker, days=days)
+    except: return []
+
+@st.cache_data(ttl=300)
+def load_ohlcv_for_chart(ticker, days=90):
+    try:
+        from src.providers.market_data import get_ohlcv_from_db
+        return get_ohlcv_from_db(ticker, days=days)
+    except: return None
 
 @st.cache_data(ttl=300)
 def load_signal_snapshot(tickers):
@@ -1798,6 +1813,27 @@ def page_broker_flow():
         with nc3:
             nb_min_net_m = st.number_input("Min. Top-N Net (juta Rp)", 1, 10000, 10, key="nb_min_net")
 
+        with st.expander("ℹ️ Table Field Reference — arti tiap kolom"):
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                st.markdown(
+                    "**Top Brokers**  \n3 broker dengan total net buy terbesar. Menampilkan broker di balik akumulasi.\n\n"
+                    "**Top-N Net**  \nTotal net buy (buy − sell) kumulatif dari broker kandidat, menjadi power akumulasi.\n\n"
+                    "**Top-N Gross**  \nTotal nilai transaksi (buy + sell) dari broker kandidat, dipakai sebagai pembanding intensitas.\n\n"
+                    "**Buyer Share**  \nRasio kekuatan beli bersih (Top-N Net) terhadap total aktivitas broker kandidat (Top-N Gross). Mendekati 100% = dominasi net buy, sedikit lawan jual."
+                )
+            with rc2:
+                st.markdown(
+                    "**Broker Concentration**  \nPersentase dominasi broker TERBESAR terhadap total net buy kandidat. **Rendah = akumulasi lebih sehat & menyebar**, tinggi = didominasi 1 broker.\n\n"
+                    "**Avg Net / Broker**  \nRata-rata net buy per broker kandidat. Mengukur kedalaman komitmen, bukan sekadar partisipasi.\n\n"
+                    "**Broker Cnt**  \nJumlah broker unik yang berkontribusi (net positif). Validasi distribusi, menghindari single-broker push.\n\n"
+                    "**Konsistensi**  \nDari window hari yang dipilih, berapa hari net TOTAL saham ini (semua broker) positif."
+                )
+            st.caption(
+                "Rekonstruksi kami sendiri dari deskripsi metodologi — bukan salinan source code proprietary "
+                "tool manapun (tidak ada akses ke situ). Lihat docstring get_net_buy_window() di broker_engine.py."
+            )
+
         netbuy = load_net_buy_window(
             window_days=nb_window, min_brokers=nb_min_brokers,
             min_topn_net=nb_min_net_m * 1_000_000, limit=30
@@ -1814,9 +1850,11 @@ def page_broker_flow():
 
             nb_c1, nb_c2, nb_c3 = st.columns(3)
             with nb_c1: st.markdown(tile("Saham Terdeteksi", str(len(netbuy))), unsafe_allow_html=True)
+            n_dominant_brokers = len({n["dominant_broker"] for n in netbuy})
+            with nb_c2: st.markdown(tile("Broker Dominan (unik)", str(n_dominant_brokers)), unsafe_allow_html=True)
             avg_buyer_share = sum(n["buyer_share_pct"] for n in netbuy) / len(netbuy)
-            with nb_c2: st.markdown(tile("Avg Buyer Share", f"{avg_buyer_share:.1f}%"), unsafe_allow_html=True)
-            with nb_c3: st.markdown(tile("Window", f"{netbuy[0]['window_start']} → {netbuy[0]['window_end']}"), unsafe_allow_html=True)
+            with nb_c3: st.markdown(tile("Avg Buyer Share", f"{avg_buyer_share:.1f}%"), unsafe_allow_html=True)
+            st.caption(f"Window: {netbuy[0]['window_start']} → {netbuy[0]['window_end']} ({netbuy[0]['window_days']} hari perdagangan)")
             st.write("")
 
             table_rows = []
@@ -1834,18 +1872,13 @@ def page_broker_flow():
                     "Top-N Net": f"{n['topn_net']:,.0f}",
                     "Top-N Gross": f"{n['topn_gross']:,.0f}",
                     "Buyer Share": f"{n['buyer_share_pct']:.1f}%",
-                    "Broker Conc.": f"{n['broker_concentration_pct']:.1f}%",
+                    "Broker Concentration": f"{n['broker_concentration_pct']:.1f}%",
                     "Avg Net/Broker": f"{n['avg_net_per_broker']:,.0f}",
-                    "Konsistensi": f"{n['consistency_days']}/{n['window_days']}d",
                     "Broker Cnt": n["broker_count"],
+                    "Konsistensi": f"{n['consistency_days']}/{n['window_days']}d",
                 })
             nb_df = pd.DataFrame(table_rows)
             st.dataframe(nb_df, use_container_width=True, hide_index=True, height=min(60 + 35 * len(nb_df), 600))
-            st.caption(
-                "Metodologi rekonstruksi sendiri (bukan salinan formula tool lain) — lihat docstring "
-                "get_net_buy_window() di broker_engine.py untuk definisi lengkap tiap kolom. "
-                "Diurutkan: konsistensi hari akumulasi → jumlah broker → kualitas (buyer share)."
-            )
 
     # ── TAB 1: TOP AKUMULASI (screener harian) ───────────────────
     with tab_screener:
@@ -1891,11 +1924,80 @@ def page_broker_flow():
                     unsafe_allow_html=True
                 )
 
-    # ── TAB 2: DETAIL SAHAM (chart + tabel broker lengkap + asing/domestik) ──
+    # ── TAB 2: DETAIL SAHAM (candlestick + zona akumulasi/distribusi) ──
     with tab_detail:
         all_tickers = [t["ticker"] for t in top]
         ticker_pick = st.selectbox("Pilih saham", all_tickers, key="broker_detail_ticker")
         if ticker_pick:
+            # ── Chart Candlestick + Zona Akumulasi/Distribusi (BARU) ──
+            section("CHART & ZONA AKUMULASI/DISTRIBUSI", "🕯️")
+            ohlcv = load_ohlcv_for_chart(ticker_pick, days=90)
+            zones = load_accumulation_zones(ticker_pick, days=90)
+
+            if ohlcv is None or ohlcv.empty:
+                st.caption("Belum ada data harga (daily_prices) untuk saham ini.")
+            else:
+                fig_candle = make_subplots(
+                    rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25],
+                    vertical_spacing=0.03,
+                )
+                fig_candle.add_trace(go.Candlestick(
+                    x=ohlcv.index, open=ohlcv["open"], high=ohlcv["high"],
+                    low=ohlcv["low"], close=ohlcv["close"],
+                    increasing_line_color="#00c896", decreasing_line_color="#f87171",
+                    name="Harga",
+                ), row=1, col=1)
+                fig_candle.add_trace(go.Bar(
+                    x=ohlcv.index, y=ohlcv["volume"],
+                    marker_color=[("#00c896" if c >= o else "#f87171") for o, c in zip(ohlcv["open"], ohlcv["close"])],
+                    name="Volume", opacity=0.6,
+                ), row=2, col=1)
+
+                # Overlay zona akumulasi/distribusi -- BARU, ala kotak
+                # "AKUMULASI + SMART MONEY" di referensi visual user.
+                # HEURISTIK sederhana (streak hari net searah), lihat
+                # docstring get_accumulation_distribution_zones().
+                for z in zones:
+                    is_acc = z["zone_type"] == "AKUMULASI"
+                    zone_color = "rgba(0,200,150,0.13)" if is_acc else "rgba(248,113,113,0.13)"
+                    border_color = "#00c896" if is_acc else "#f87171"
+                    fig_candle.add_vrect(
+                        x0=z["start_date"], x1=z["end_date"],
+                        fillcolor=zone_color, line_color=border_color, line_width=1,
+                        row=1, col=1,
+                    )
+                    label = z["zone_type"]
+                    if z.get("dominant_broker"):
+                        net_b = abs(z["total_net_value"])
+                        net_label = f"{net_b/1e9:.1f}M" if net_b < 1e12 else f"{net_b/1e12:.2f}T"
+                        label += f" · {z['dominant_broker']} · Rp{net_label}"
+
+                    # Posisi label: sedikit di atas candle TERTINGGI dalam
+                    # rentang zona itu (bukan domain-relative) supaya tidak
+                    # menabrak candle atau volume bar di bawahnya.
+                    zone_mask = (ohlcv.index >= pd.to_datetime(z["start_date"])) & (ohlcv.index <= pd.to_datetime(z["end_date"]))
+                    zone_high = ohlcv.loc[zone_mask, "high"].max() if zone_mask.any() else ohlcv["high"].max()
+                    label_y = zone_high * 1.015 if pd.notna(zone_high) else ohlcv["high"].max()
+
+                    fig_candle.add_annotation(
+                        x=z["start_date"], y=label_y,
+                        text=label, showarrow=False, xanchor="left", yanchor="bottom",
+                        font=dict(size=9, color=border_color),
+                        row=1, col=1,
+                    )
+
+                fig_candle.update_layout(
+                    height=460, **LAYOUT, showlegend=False,
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    xaxis_rangeslider_visible=False,
+                )
+                st.plotly_chart(fig_candle, use_container_width=True)
+                st.caption(
+                    "Zona hijau/merah = akumulasi/distribusi broker terdeteksi (heuristik: hari perdagangan "
+                    "berturut-turut dengan net flow broker searah, min. 2 hari) — BUKAN analisis Wyckoff formal. "
+                    "Label menunjukkan broker paling dominan di zona itu + total net value-nya."
+                )
+
             detail = load_broker_flow_detail(ticker_pick, days=30)
             if detail:
                 ddf = pd.DataFrame(detail).sort_values("trade_date")
