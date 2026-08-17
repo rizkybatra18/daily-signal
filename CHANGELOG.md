@@ -2,6 +2,59 @@
 
 ---
 
+## v2.7.3 — Redesign Terminal ke SEMUA Halaman (2026-08)
+
+### 🎨 Latar belakang
+Lanjutan permintaan rombak dashboard ala terminal trading profesional
+(referensi visual user). Sebelumnya (v2.7.2) baru chart candlestick +
+zona akumulasi/distribusi di 1 halaman. Sekarang: redesign level
+DESIGN SYSTEM supaya otomatis konsisten di SEMUA 8 halaman sekaligus
+(bukan menulis ulang tiap halaman satu-satu -- lebih efisien & lebih
+konsisten, karena semua halaman sudah pakai helper bersama seperti
+`tile()`/`section()`/badge functions).
+
+### ✨ Perubahan visual (berlaku di semua halaman)
+- **Terminal Top Bar (BARU)**: bar F-key ala referensi, render sekali
+  di `main()` jadi otomatis muncul di semua halaman. F1-F8 memetakan ke
+  8 halaman yang ada (Home/Top Signals/Signal Detail/dst) -- klik
+  berfungsi pindah halaman (pakai mekanisme `nav_override` yang sudah
+  ada), TIDAK benar-benar terikat tombol keyboard fisik F1-F12 (itu
+  butuh JS keybinding kustom + berisiko bentrok shortcut browser
+  bawaan seperti F5=refresh/F11=fullscreen -- di luar scope perubahan
+  presentasi murni). Ada jam WIB live di kanan.
+- **Aksen cyan (BARU)**: warna terminal klasik ditambahkan sebagai
+  aksen kedua (`--cyan`), dipakai di border section header, tombol
+  aktif di top bar, hover state. Warna sinyal (hijau/kuning/merah)
+  TIDAK diubah -- makna semantiknya tetap sama.
+- **Font monospace (JetBrains Mono, BARU)**: semua angka/tabel/kode
+  broker sekarang pakai font monospace ala terminal (sebelumnya Inter
+  proporsional) -- lebih mudah dibandingkan sejajar, kesan "data
+  terminal" yang lebih kuat.
+- **Section header dirombak**: dari teks tebal biasa jadi gaya "panel
+  terminal" -- border kiri aksen cyan, uppercase, letter-spacing lebar,
+  ukuran lebih kecil & padat.
+- **Density dinaikkan**: padding card/tile dikurangi, border-radius
+  diperkecil (14px→10px, 12px→10px) -- kesan lebih padat/teknikal,
+  bukan lagi "friendly rounded corners".
+- **Palet lebih gelap**: background dasar #0a0e1a→#060a12, permukaan
+  card sedikit disesuaikan -- kontras lebih tinggi ala terminal gelap.
+- Warna chart Plotly (LAYOUT dict) disesuaikan biar senada dengan
+  palet baru (background lebih gelap, grid lebih redup, font monospace).
+
+### ⚠️ Batasan yang TETAP berlaku (sudah disampaikan di v2.7.2, ditegaskan lagi)
+- Panel order book/bid-ask real-time dari referensi visual **TIDAK
+  DIBUAT** -- itu data Level-2 real-time, beda total sumber data dari
+  yang kita punya (Yahoo Finance EOD + broker summary harian dari
+  vendor terpisah). Butuh vendor data lain yang jauh lebih mahal.
+- Layout Streamlit fundamentalnya berbasis HALAMAN (1 tampilan penuh
+  per waktu), BUKAN multi-panel simultan seperti terminal native
+  (Bloomberg dkk menampilkan banyak jendela sekaligus di 1 layar).
+  Yang dibangun adalah pendekatan terdekat yang realistis: nav cepat
+  ala F-key + desain visual senada di semua halaman, bukan multi-panel
+  literal.
+
+---
+
 ## v2.7.2 — Fix Formula Net Buy Window, Chart Candlestick + Zona Akumulasi/Distribusi (2026-08)
 
 ### 🎯 Latar belakang

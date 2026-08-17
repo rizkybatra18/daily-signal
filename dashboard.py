@@ -54,21 +54,23 @@ st.set_page_config(
 
 _CSS_BLOCK = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 
 /* ── Base tokens ─────────────────────────────────────────────── */
 :root{
-    --bg:            #0a0e1a;
-    --surface:       #131824;
-    --surface-2:     #171d2c;
-    --border:        #1f2937;
-    --border-soft:   #1a2233;
+    --bg:            #060a12;
+    --surface:       #10151f;
+    --surface-2:     #151b28;
+    --border:        #1c2433;
+    --border-soft:   #161d2b;
     --text:          #e8ebf2;
-    --text-dim:      #9aa4b8;
-    --text-faint:    #5c6478;
+    --text-dim:      #8b95ab;
+    --text-faint:    #545e73;
     --accent:        #60a5fa;
     --accent-soft:   rgba(96,165,250,.12);
+    --cyan:          #22d3ee;
+    --cyan-soft:     rgba(34,211,238,.12);
     --strong-buy:    #00c896;
     --buy:           #4ade80;
     --watchlist:     #fbbf24;
@@ -77,6 +79,7 @@ _CSS_BLOCK = """
     --buy-bg:        rgba(74,222,128,.12);
     --watchlist-bg:  rgba(251,191,36,.12);
     --avoid-bg:      rgba(248,113,113,.12);
+    --mono: 'JetBrains Mono', 'Roboto Mono', ui-monospace, Consolas, monospace;
 }
 
 html, body, [class*="css"]{
@@ -87,12 +90,33 @@ h1,h2,h3,h4, .ds-heading{
 }
 
 .main{ padding: 0 1.4rem; background: var(--bg); }
-.block-container{ padding-top: 1rem; padding-bottom: 2rem; max-width: 1400px; }
+.block-container{ padding-top: .6rem; padding-bottom: 2rem; max-width: 1440px; }
 [data-testid="stAppViewContainer"]{ background: var(--bg); }
 [data-testid="stHeader"]{ background: transparent; }
 
-/* Angka selalu tabular (sejajar) */
-.ds-num{ font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+/* Angka selalu tabular (sejajar) + monospace terminal-style */
+.ds-num{ font-variant-numeric: tabular-nums; font-feature-settings: "tnum";
+    font-family: var(--mono); }
+
+/* ── Terminal Top Bar (BARU, ala referensi terminal trading) ──── */
+.ds-termbar-brand{ font-family:var(--mono); font-weight:700; font-size:.92rem;
+    color:var(--cyan); letter-spacing:.03em; padding-top:6px; white-space:nowrap; }
+.ds-termbar-brand-sub{ color:var(--text-faint); font-weight:500; font-size:.72rem; margin-left:4px; }
+.ds-termbar-clock{ font-family:var(--mono); font-size:.82rem; color:var(--text-dim);
+    text-align:right; padding-top:8px; white-space:nowrap; }
+div[data-testid="column"] button[kind="secondary"]{
+    font-family:var(--mono) !important; font-size:.68rem !important; letter-spacing:.02em;
+    background:var(--surface) !important; border:1px solid var(--border) !important;
+    color:var(--text-dim) !important; padding:4px 6px !important; min-height:2rem !important;
+}
+div[data-testid="column"] button[kind="secondary"]:hover{
+    border-color:var(--cyan) !important; color:var(--cyan) !important;
+}
+div[data-testid="column"] button[kind="primary"]{
+    font-family:var(--mono) !important; font-size:.68rem !important; letter-spacing:.02em;
+    background:var(--cyan-soft) !important; border:1px solid var(--cyan) !important;
+    color:var(--cyan) !important; padding:4px 6px !important; min-height:2rem !important;
+}
 
 /* ── Sidebar ──────────────────────────────────────────────────── */
 div[data-testid="stSidebarContent"]{
@@ -122,44 +146,50 @@ div[data-testid="metric-container"]{
 }
 div[data-testid="metric-container"] label{ color:var(--text-dim) !important; font-size:.75rem; }
 div[data-testid="metric-container"] div[data-testid="stMetricValue"]{
-    font-size:1.35rem; font-weight:700; color:var(--text); font-family:'Inter',sans-serif;
+    font-size:1.35rem; font-weight:700; color:var(--text); font-family:var(--mono);
 }
 
 /* ── Typography helpers ──────────────────────────────────────── */
 .ds-page-title{ font-family:'Manrope',sans-serif; font-weight:800; font-size:1.7rem;
     color:var(--text); letter-spacing:-.02em; margin-bottom:2px; }
 .ds-page-sub{ color:var(--text-faint); font-size:.85rem; margin-bottom:1.1rem; }
-.ds-section{ font-family:'Manrope',sans-serif; font-weight:700; font-size:.95rem;
-    color:var(--text); margin: 22px 0 10px; display:flex; align-items:center; gap:8px; }
+
+/* Section header ala "panel terminal" -- border kiri aksen + uppercase
+   letter-spacing, bukan lagi cuma teks tebal biasa (BARU, terminal redesign) */
+.ds-section{ font-family:var(--mono); font-weight:700; font-size:.78rem;
+    color:var(--text-dim); text-transform:uppercase; letter-spacing:.08em;
+    margin: 20px 0 10px; padding:6px 0 6px 10px; border-left:2px solid var(--cyan);
+    display:flex; align-items:center; gap:8px; }
 .ds-section .ds-section-line{ flex:1; height:1px; background:var(--border); }
 .ds-caption{ color:var(--text-faint); font-size:.78rem; }
 
 /* ── Cards ────────────────────────────────────────────────────── */
 .ds-card{
     background: var(--surface); border:1px solid var(--border);
-    border-radius: 14px; padding: 18px 20px; margin-bottom: 12px;
+    border-radius: 10px; padding: 16px 18px; margin-bottom: 10px;
 }
 .ds-card-flush{ padding:0; overflow:hidden; }
 .ds-hero{
     background: linear-gradient(135deg, var(--surface) 0%, var(--surface-2) 100%);
-    border:1px solid var(--border); border-radius:16px; padding:22px 26px; margin-bottom:16px;
+    border:1px solid var(--border); border-radius:12px; padding:20px 24px; margin-bottom:14px;
 }
 
 /* ── Metric tile (custom, dipakai di Home & Signal Detail) ──── */
 .ds-tile{
-    background: var(--surface); border:1px solid var(--border); border-radius:12px;
-    padding:13px 16px; height:100%;
+    background: var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:12px 15px; height:100%;
 }
-.ds-tile-label{ color:var(--text-faint); font-size:.7rem; text-transform:uppercase;
-    letter-spacing:.06em; margin-bottom:5px; }
-.ds-tile-value{ font-family:'Inter',sans-serif; font-weight:700; font-size:1.25rem;
+.ds-tile-label{ color:var(--text-faint); font-size:.68rem; text-transform:uppercase;
+    letter-spacing:.06em; margin-bottom:5px; font-family:var(--mono); }
+.ds-tile-value{ font-family:var(--mono); font-weight:700; font-size:1.2rem;
     color:var(--text); font-variant-numeric: tabular-nums; }
-.ds-tile-delta{ font-size:.74rem; margin-top:3px; }
+.ds-tile-delta{ font-size:.74rem; margin-top:3px; font-family:var(--mono); }
 .ds-up{ color: var(--buy); } .ds-down{ color: var(--avoid); } .ds-flat{ color:var(--text-faint); }
 
 /* ── Badges / Chips ───────────────────────────────────────────── */
 .ds-badge{ display:inline-flex; align-items:center; gap:5px; padding:3px 11px;
-    border-radius:20px; font-weight:700; font-size:.71rem; letter-spacing:.02em; }
+    border-radius:4px; font-weight:700; font-size:.68rem; letter-spacing:.03em;
+    font-family:var(--mono); text-transform:uppercase; }
 .ds-badge::before{ content:''; width:6px; height:6px; border-radius:50%; }
 .ds-badge-sb{ background:var(--strong-buy-bg); color:var(--strong-buy); }
 .ds-badge-sb::before{ background:var(--strong-buy); }
@@ -170,29 +200,31 @@ div[data-testid="metric-container"] div[data-testid="stMetricValue"]{
 .ds-badge-av{ background:var(--avoid-bg); color:var(--avoid); }
 .ds-badge-av::before{ background:var(--avoid); }
 
-.ds-chip{ display:inline-block; padding:2px 9px; border-radius:6px; font-size:.71rem;
-    background:var(--surface-2); color:var(--text-dim); border:1px solid var(--border); }
-.ds-chip-accent{ background:var(--accent-soft); color:var(--accent); border-color:transparent; }
+.ds-chip{ display:inline-block; padding:2px 9px; border-radius:4px; font-size:.7rem;
+    background:var(--surface-2); color:var(--text-dim); border:1px solid var(--border);
+    font-family:var(--mono); }
+.ds-chip-accent{ background:var(--cyan-soft); color:var(--cyan); border-color:transparent; }
 
 .ds-conf{ display:inline-flex; align-items:center; gap:4px; font-size:.71rem; font-weight:600; }
 .ds-conf-dots span{ width:5px; height:5px; border-radius:50%; display:inline-block; margin-right:2px; background:var(--border); }
 
 /* ── Gauge / progress bars ───────────────────────────────────── */
 .ds-gauge-row{ display:flex; align-items:center; gap:10px; margin:7px 0; }
-.ds-gauge-label{ width:92px; font-size:.78rem; color:var(--text-dim); flex-shrink:0; }
-.ds-gauge-track{ flex:1; height:9px; background:var(--surface-2); border-radius:5px; overflow:hidden; }
-.ds-gauge-fill{ height:100%; border-radius:5px; }
+.ds-gauge-label{ width:92px; font-size:.75rem; color:var(--text-dim); flex-shrink:0; font-family:var(--mono); }
+.ds-gauge-track{ flex:1; height:8px; background:var(--surface-2); border-radius:3px; overflow:hidden; }
+.ds-gauge-fill{ height:100%; border-radius:3px; }
 .ds-gauge-val{ width:52px; text-align:right; font-size:.78rem; font-weight:700; color:var(--text);
-    font-variant-numeric: tabular-nums; flex-shrink:0; }
+    font-family:var(--mono); font-variant-numeric: tabular-nums; flex-shrink:0; }
 
 /* ── Signal list row (Top Signals / Home top picks) ──────────── */
 .ds-row{
-    display:flex; align-items:center; gap:14px; padding:12px 16px;
+    display:flex; align-items:center; gap:14px; padding:10px 16px;
     border-bottom:1px solid var(--border-soft); transition:background .12s;
 }
 .ds-row:last-child{ border-bottom:none; }
 .ds-row:hover{ background: var(--surface-2); }
-.ds-row-ticker{ font-weight:700; font-size:.92rem; color:var(--text); width:64px; flex-shrink:0; }
+.ds-row-ticker{ font-weight:700; font-size:.92rem; color:var(--text); width:64px; flex-shrink:0;
+    font-family:var(--mono); }
 .ds-row-sector{ color:var(--text-faint); font-size:.72rem; }
 
 /* ── Reason checklist ─────────────────────────────────────────── */
@@ -209,9 +241,10 @@ div[data-testid="metric-container"] div[data-testid="stMetricValue"]{
 hr{ border-color: var(--border) !important; }
 .ds-hr{ height:1px; background:var(--border); margin:14px 0; border:none; }
 
-/* ── Flow / VSA badges (BARU, v2.5.0) ────────────────────────── */
+/* ── Flow / VSA badges (v2.5.0) ──────────────────────────────── */
 .ds-flow{ display:inline-flex; align-items:center; gap:5px; padding:3px 10px;
-    border-radius:20px; font-weight:700; font-size:.68rem; letter-spacing:.02em; white-space:nowrap; }
+    border-radius:4px; font-weight:700; font-size:.66rem; letter-spacing:.02em; white-space:nowrap;
+    font-family:var(--mono); text-transform:uppercase; }
 .ds-flow::before{ content:''; width:6px; height:6px; border-radius:50%; flex-shrink:0; }
 .ds-flow-acc{ background: var(--strong-buy-bg); color: var(--strong-buy); }
 .ds-flow-acc::before{ background: var(--strong-buy); }
@@ -224,23 +257,26 @@ hr{ border-color: var(--border) !important; }
 .ds-flow-neutral{ background: transparent; color: var(--text-faint); border:1px dashed var(--border); }
 .ds-flow-neutral::before{ display:none; }
 
-/* ── Trend Structure chip (BARU, v2.5.0) ─────────────────────── */
-.ds-struct{ display:inline-block; padding:2px 10px; border-radius:6px; font-size:.71rem; font-weight:600; }
+/* ── Trend Structure chip (v2.5.0) ───────────────────────────── */
+.ds-struct{ display:inline-block; padding:2px 10px; border-radius:4px; font-size:.7rem; font-weight:600;
+    font-family:var(--mono); }
 .ds-struct-good{ background: var(--strong-buy-bg); color: var(--strong-buy); }
 .ds-struct-neutral{ background: var(--surface-2); color: var(--text-dim); }
 .ds-struct-weak{ background: var(--avoid-bg); color: var(--avoid); }
 
-/* ── Flow Radar card (Home, signature widget BARU v2.5.0) ────── */
+/* ── Flow Radar card (Home, signature widget v2.5.0) ─────────── */
 .ds-radar-item{ display:flex; align-items:center; gap:12px; padding:11px 16px;
     border-bottom:1px solid var(--border-soft); }
 .ds-radar-item:last-child{ border-bottom:none; }
-.ds-radar-rank{ width:20px; color:var(--text-faint); font-size:.78rem; font-weight:700; flex-shrink:0; }
+.ds-radar-rank{ width:20px; color:var(--text-faint); font-size:.78rem; font-weight:700; flex-shrink:0;
+    font-family:var(--mono); }
 .ds-radar-bar-track{ flex:1; height:6px; background:var(--surface-2); border-radius:3px; overflow:hidden; }
 .ds-radar-bar-fill{ height:100%; border-radius:3px; background:linear-gradient(90deg, var(--strong-buy) 0%, #00e6a8 100%); }
 
-/* Streamlit widget refinement */
-.stDataFrame{ border-radius:12px; overflow:hidden; border:1px solid var(--border); }
-button[kind="secondary"], button[kind="primary"]{ border-radius:9px !important; }
+/* Streamlit widget refinement -- lebih padat & monospace ala terminal */
+.stDataFrame{ border-radius:8px; overflow:hidden; border:1px solid var(--border); }
+.stDataFrame [data-testid="stDataFrameResizable"]{ font-family: var(--mono); font-size:.82rem; }
+button[kind="secondary"], button[kind="primary"]{ border-radius:6px !important; }
 </style>
 """
 
@@ -382,10 +418,10 @@ def regime_visual(r):
     }.get(r, ("⚪", "#9aa4b8", "Status pasar belum diketahui."))
 
 DARK_BG = "rgba(0,0,0,0)"
-PLOT_BG = "rgba(19,24,36,1)"
-GRID    = "#1f2937"
+PLOT_BG = "rgba(16,21,31,1)"
+GRID    = "#1c2433"
 LAYOUT  = dict(paper_bgcolor=DARK_BG, plot_bgcolor=PLOT_BG,
-               font=dict(family="Inter, sans-serif", color="#9aa4b8", size=11),
+               font=dict(family="JetBrains Mono, monospace", color="#8b95ab", size=11),
                margin=dict(l=0,r=0,t=30,b=0),
                xaxis=dict(gridcolor=GRID), yaxis=dict(gridcolor=GRID))
 
@@ -2298,11 +2334,46 @@ def page_system_health():
 #  MAIN
 # ══════════════════════════════════════════════════════════════════
 
+def render_terminal_bar(current_page: str):
+    """
+    Bar terminal ala referensi trading terminal user (BARU, redesign
+    total dashboard) -- di-render SEKALI di main(), otomatis muncul di
+    SEMUA halaman tanpa perlu sentuh tiap page_*() satu-satu.
+
+    F-key di sini DEKORATIF SEKALIGUS FUNGSIONAL: label "F1/F2/dst" ala
+    terminal, tapi klik = pindah halaman via nav_override (state yang
+    sama dipakai sidebar). TIDAK benar-benar terikat tombol keyboard
+    fisik F1-F12 -- itu butuh JS keybinding kustom, di luar scope
+    perubahan presentasi murni (dan berisiko bentrok keyboard shortcut
+    browser bawaan seperti F5=refresh, F11=fullscreen).
+    """
+    col_widths = [1.4] + [1.0] * len(PAGES) + [1.05]
+    cols = st.columns(col_widths, gap="small")
+
+    with cols[0]:
+        st.markdown('<div class="ds-termbar-brand">◆ SDL <span class="ds-termbar-brand-sub">TERMINAL</span></div>', unsafe_allow_html=True)
+
+    for i, (key, icon, name) in enumerate(PAGES):
+        with cols[i + 1]:
+            short = name.split()[0].upper()
+            btn_type = "primary" if key == current_page else "secondary"
+            if st.button(f"F{i+1} {short}", key=f"fkey_{key}", use_container_width=True, type=btn_type):
+                st.session_state["nav_override"] = key
+                st.rerun()
+
+    with cols[-1]:
+        st.markdown(f'<div class="ds-termbar-clock">{_now_wib().strftime("%H:%M:%S WIB")}</div>', unsafe_allow_html=True)
+
+    st.markdown("<hr class='ds-hr' style='margin:6px 0 16px'>", unsafe_allow_html=True)
+
+
 def main():
     page = render_sidebar()
 
     if "nav_override" in st.session_state:
         page = st.session_state.pop("nav_override")
+
+    render_terminal_bar(page)
 
     page_map = {
         "home":        page_home,
