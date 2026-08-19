@@ -48,6 +48,23 @@ TAPI ditemukan 3 masalah REALISME EKSEKUSI yang sudah diperbaiki:
      (exit penuh di TP1) yang beda dari yang dilacak live. Diperbaiki:
      tp2 dihitung & urutan cek disamakan persis dengan _walk_price_path.
 
+  6. [v2.8.0, 2026-08] CELAH PARITAS YANG DISENGAJA — analog_score (lihat
+     src/signals/analog_engine.py, K-Nearest Neighbor per-ticker) TIDAK
+     disimulasikan di backtest ini. _score_row() di bawah cuma menjumlah
+     6 komponen (trend/momentum/volume/strength/volatility/flow), analog
+     TIDAK diikutkan sama sekali -- beda dari live yang BISA mengikutkan
+     analog_score untuk ticker yang lolos filter teknikal. INI BUKAN
+     KELALAIAN: menjalankan KNN analog matching untuk SETIAP hari di
+     backtest (ribuan hari × ribuan kandidat historis per hari) akan
+     sangat mahal komputasi -- O(n²) per ticker, backtest 50 ticker × 3
+     tahun bisa berubah dari menit jadi jam. Konsekuensinya: skor
+     backtest utk trend/momentum/volume/strength/volatility/flow tetap
+     apple-to-apple dgn live, TAPI raw_score/signal_type di backtest
+     SEDIKIT bias ke bawah dibanding live untuk ticker yang analog_score-nya
+     tinggi. Belum ada rencana perbaikan -- didokumentasikan jujur di sini
+     supaya tidak jadi kejutan kalau ada yang membandingkan angka backtest
+     vs live secara langsung.
+
 Metrik output:
     Win Rate, Profit Factor, Expectancy, Sharpe, Sortino,
     Calmar, Max Drawdown, Avg Gain, Avg Loss

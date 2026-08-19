@@ -33,12 +33,14 @@ log = get_logger("ta_engine")
 # ═══════════════════════════════════════════════════════════════════════
 TREND_SCORE_CAP      = 22.0   # SEBELUMNYA 30, lalu 20 -- lihat AUDIT CompositeScore
 MOMENTUM_SCORE_CAP   = 25.0
-VOLUME_SCORE_CAP     = 20.0
+VOLUME_SCORE_CAP     = 15.0   # SEBELUMNYA 20 -- 5 poin dipindah ke analog_score (lihat AUDIT)
 STRENGTH_SCORE_CAP   = 21.0
 VOLATILITY_SCORE_CAP = 2.0    # SEBELUMNYA 10, lalu 4 -- lihat AUDIT CompositeScore
-FLOW_SCORE_CAP       = 10.0   # BARU
+FLOW_SCORE_CAP       = 10.0
+ANALOG_SCORE_CAP     = 5.0    # BARU -- lihat AUDIT CompositeScore & src/signals/analog_engine.py
 TOTAL_SCORE_CAP      = (TREND_SCORE_CAP + MOMENTUM_SCORE_CAP + VOLUME_SCORE_CAP +
-                         STRENGTH_SCORE_CAP + VOLATILITY_SCORE_CAP + FLOW_SCORE_CAP)
+                         STRENGTH_SCORE_CAP + VOLATILITY_SCORE_CAP + FLOW_SCORE_CAP +
+                         ANALOG_SCORE_CAP)
 assert TOTAL_SCORE_CAP == 100.0, f"Total cap harus 100, sekarang {TOTAL_SCORE_CAP}"
 
 
@@ -122,6 +124,22 @@ class FlowIndicators:
 
 
 @dataclass
+class AnalogInfo:
+    """
+    Hasil K-Nearest Neighbor analog matching (BARU) -- lihat
+    src/signals/analog_engine.py. DIHITUNG DI LUAR ta_engine.py (di
+    scanner.py, hindari circular import ke backtest.engine) lalu
+    dikirim ke analyze_stock() sebagai parameter, mirror pola
+    sector_bonus. Field mentah disimpan (bukan cuma skornya) supaya
+    transparan & bisa ditelusuri manual dari dashboard.
+    """
+    n_analogs: int = 0
+    win_rate: float = 0.0           # 0-100
+    avg_return_pct: float = 0.0
+    reliable: bool = False          # False = analog_score dipaksa 0 (lihat score_from_analog)
+
+
+@dataclass
 class RiskLevels:
     entry_price: float = 0.0
     stop_loss: float = 0.0
@@ -140,16 +158,27 @@ class CompositeScore:
     """
     Composite Score 0-100.
 
-    Formula (v2.4.0 -- lihat AUDIT di bawah untuk alasan trend_score
-    dipotong & flow_score baru ditambahkan):
+    Formula (v2.8.0 -- lihat AUDIT di bawah untuk riwayat perubahan
+    tiap komponen):
         trend_score     = 0-22  (EMA alignment + structure -- SEBELUMNYA 0-30, lalu 0-20)
         momentum_score  = 0-25  (RSI zone, MACD direction)
-        volume_score    = 0-20  (volume ratio, spike)
+        volume_score    = 0-15  (volume ratio, spike -- SEBELUMNYA 0-20)
         strength_score  = 0-21  (ADX, relative strength)
         volatility_score= 0-2   (ATR position, BB squeeze -- SEBELUMNYA 0-10, lalu 0-4)
         flow_score      = 0-10  (proxy bandarmology gratis dari OBV/CMF/MFI/VSA)
+        analog_score    = 0-5   (BARU -- K-Nearest Neighbor analog matching,
+                                  lihat src/signals/analog_engine.py)
         ─────────────────────────
         Total           = 0-100
+
+    AUDIT (analog_score BARU, 2026-08): 5 poin diambil dari volume_score
+    (20->15) -- komponen dgn bukti PALING LEMAH sejauh ini (rho=-0.057,
+    p=0.278, TIDAK SIGNIFIKAN, lihat analisis signal_results n=368).
+    analog_score dihitung DI LUAR analyze_stock() (scanner.py, hindari
+    circular import ke backtest.engine) lalu dikirim sebagai parameter
+    -- pola sama seperti sector_bonus. BELUM ADA VALIDASI EMPIRIS sama
+    sekali (fitur baru) -- treat sebagai hipotesis, bukan fakta, sampai
+    ada cukup data live untuk diaudit ulang seperti komponen lain.
 
     AUDIT (trend_score dipotong 30->20, 2026-08, lihat analisis
     signal_results n=265, 27 Jul-7 Aug 2026): trend_score BERKORELASI
@@ -176,6 +205,7 @@ class CompositeScore:
     strength_score: float = 0.0
     volatility_score: float = 0.0
     flow_score: float = 0.0
+    analog_score: float = 0.0       # BARU -- lihat AUDIT & src/signals/analog_engine.py
     raw_score: float = 0.0          # Sum sebelum regime adjustment (+ sector bonus)
     sector_bonus: float = 0.0        # +5/-5/0 dari sector rotation, sudah masuk raw_score
     regime_weight: float = 1.0       # Multiplier dari market regime (untuk display)
@@ -200,6 +230,7 @@ class StockAnalysis:
     volume: VolumeIndicators = field(default_factory=VolumeIndicators)
     volatility: VolatilityIndicators = field(default_factory=VolatilityIndicators)
     flow: FlowIndicators = field(default_factory=FlowIndicators)
+    analog: AnalogInfo = field(default_factory=AnalogInfo)
     risk: RiskLevels = field(default_factory=RiskLevels)
     score: CompositeScore = field(default_factory=CompositeScore)
     factor_contribution: dict = field(default_factory=dict)   # lihat build_factor_contribution()
@@ -257,6 +288,13 @@ class StockAnalysis:
             "mfi":            self.flow.mfi,
             "vsa_signal":     self.flow.vsa_signal,
             "flow_score":     self.score.flow_score,
+
+            # === ANALOG (BARU -- K-Nearest Neighbor, migration baru) ===
+            "analog_score":       self.score.analog_score,
+            "analog_n":           self.analog.n_analogs,
+            "analog_win_rate":    self.analog.win_rate,
+            "analog_avg_return":  self.analog.avg_return_pct,
+            "analog_reliable":    self.analog.reliable,
 
             # === RISK MANAGEMENT ===
             "entry_price":  self.risk.entry_price,
@@ -644,30 +682,35 @@ def _score_momentum(analysis: StockAnalysis) -> float:
 
 def _score_volume(analysis: StockAnalysis) -> float:
     """
-    Volume Score: 0-20 poin
+    Volume Score: 0-15 poin (v2.8.0 -- SEBELUMNYA 0-20, 5 poin dipindah
+    ke analog_score baru, lihat AUDIT CompositeScore. Poin internal
+    diskalakan proporsional ×0.75 dari versi lama, BUKAN cuma dipotong
+    cap-nya -- konsisten dengan pola rescaling trend_score/volatility_score
+    sebelumnya, supaya resolusi/urutan relatif antar kombinasi tetap terjaga.)
 
     Volume Ratio (actual/avg):
-    > 2.0x: surge (15 poin)
-    1.5-2.0x: spike (10 poin)
-    1.0-1.5x: above average (6 poin)
-    < 1.0x: below average (2 poin)
+    > 2.0x: surge (11 poin)
+    1.5-2.0x: spike (8 poin)
+    1.2-1.5x: above average (5 poin)
+    1.0-1.2x: sedikit di atas rata-rata (3 poin)
+    0.7-1.0x: sedikit di bawah rata-rata (1 poin)
 
-    Volume Trend (0-5 bonus)
+    Volume Trend (0-4 bonus)
     """
     score = 0.0
     v = analysis.volume
 
     ratio = v.volume_ratio
 
-    if ratio >= 2.0:        score += 15
-    elif ratio >= 1.5:      score += 10
-    elif ratio >= 1.2:      score += 7
-    elif ratio >= 1.0:      score += 4
-    elif ratio >= 0.7:      score += 2
+    if ratio >= 2.0:        score += 11
+    elif ratio >= 1.5:      score += 8
+    elif ratio >= 1.2:      score += 5
+    elif ratio >= 1.0:      score += 3
+    elif ratio >= 0.7:      score += 1
     else:                   score += 0
 
-    if v.volume_trend == "SURGE":      score += 5
-    elif v.volume_trend == "INCREASING": score += 3
+    if v.volume_trend == "SURGE":      score += 4
+    elif v.volume_trend == "INCREASING": score += 2
 
     return min(score, VOLUME_SCORE_CAP)
 
@@ -1026,6 +1069,8 @@ def analyze_stock(
     regime_weight: float = 1.0,
     regime: str = "BULL",
     sector_bonus: float = 0.0,
+    analog_score: float = 0.0,
+    analog_info: Optional["AnalogInfo"] = None,
 ) -> Optional[StockAnalysis]:
     """
     Analisis lengkap satu saham.
@@ -1042,6 +1087,17 @@ def analyze_stock(
             compatible dengan caller lama yang hanya mengisi regime_weight.
         sector_bonus: +5/-5/0 dari sector rotation (top3/bottom3),
             diterapkan ke RAW score SEBELUM dikalikan regime_weight.
+        analog_score: (BARU) 0-ANALOG_SCORE_CAP poin, SUDAH DIHITUNG oleh
+            caller (scanner.py) lewat analog_engine.py::score_from_analog()
+            -- pola sama persis dengan sector_bonus: fungsi ini TIDAK
+            menghitung ulang formulanya sendiri (hindari 2 sumber
+            kebenaran untuk 1 formula, pola bug yang berulang kali
+            ditemukan sepanjang audit sistem ini). Default 0.0 = analog
+            belum dihitung (co. ticker belum lolos filter teknikal tahap 1).
+        analog_info: (BARU) Metadata mentah (win_rate, n_analogs, dst) dari
+            src/signals/analog_engine.py -- HANYA untuk disimpan/ditampilkan
+            (to_dict()), TIDAK dipakai untuk hitung skor di fungsi ini
+            (skornya sudah jadi lewat parameter analog_score di atas).
 
     Returns:
         StockAnalysis atau None jika data tidak memadai
@@ -1249,6 +1305,7 @@ def analyze_stock(
                 mfi=round(safe_float(mfi_series), 1),
                 vsa_signal=str(vsa_series.iloc[-1]) if len(vsa_series) else "NEUTRAL",
             ),
+            analog=analog_info if analog_info is not None else AnalogInfo(),
         )
 
         # ── Scoring ─────────────────────────────────────────────
@@ -1260,8 +1317,13 @@ def analyze_stock(
         volatility_score = _score_volatility(analysis, last_close)
         flow_score = _score_flow(analysis)
 
+        # analog_score TIDAK dihitung di sini -- sudah jadi angka dari
+        # parameter (dihitung caller lewat analog_engine.py::
+        # score_from_analog(), single source of truth, lihat AUDIT di
+        # docstring parameter analog_score di atas).
         raw_score_base = (trend_score + momentum_score + volume_score +
-                           strength_score + volatility_score + flow_score)
+                           strength_score + volatility_score + flow_score +
+                           analog_score)
 
         # AUDIT FIX: sector_bonus diterapkan ke RAW score (bukan final_score
         # yang sudah dikalikan regime_weight). Sebelumnya bonus diterapkan
@@ -1283,6 +1345,7 @@ def analyze_stock(
             strength_score=round(strength_score, 1),
             volatility_score=round(volatility_score, 1),
             flow_score=round(flow_score, 1),
+            analog_score=round(analog_score, 1),
             raw_score=round(raw_score, 1),
             sector_bonus=round(sector_bonus, 1),
             regime_weight=regime_weight,

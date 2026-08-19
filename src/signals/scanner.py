@@ -12,7 +12,8 @@ di Step 3/4/5 di bawah untuk alasannya):
     5. Sector Rotation    → ranking sektor
     6. TA Engine          → analisis teknikal + scoring per saham (parallel)
     7. Filter & Funnel    → buang yang tidak layak, log funnel lengkap
-    8. Output             → simpan ke database + kirim Telegram
+    8. Analog Matching     → K-Nearest Neighbor utk kandidat lolos teknikal (BARU, v2.8.0)
+    9. Output              → simpan ke database + kirim Telegram
 """
 
 import concurrent.futures
@@ -28,7 +29,7 @@ from src.core.logger import get_logger
 from src.core.database import save_signal, log_scan_run, update_scan_run, get_db, ensure_stocks_registered
 from src.providers.universe_manager import get_all_bei_tickers, get_tickers_by_sector, TICKER_SECTOR
 from src.providers.market_data import MarketDataProvider, IncrementalDataUpdater, get_ohlcv_from_db
-from src.signals.ta_engine import analyze_stock, apply_basic_filters, StockAnalysis
+from src.signals.ta_engine import analyze_stock, apply_basic_filters, StockAnalysis, AnalogInfo
 from src.signals.regime_engine import detect_market_regime, compute_market_breadth, MarketRegime
 from src.signals.sector_engine import calculate_sector_rankings, get_sector_bonus
 
@@ -72,13 +73,13 @@ def run_daily_scan(
 
     try:
         # ── Step 1: Dapatkan Universe ──────────────────────────────
-        log.info("[1/8] Mengambil universe saham BEI...")
+        log.info("[1/9] Mengambil universe saham BEI...")
         all_tickers = get_all_bei_tickers()
         universe_count = len(all_tickers)
         log.info(f"      → {universe_count} ticker di universe")
 
         # ── Step 2: Update Data Incremental ───────────────────────
-        log.info("[2/8] Update data harga (incremental)...")
+        log.info("[2/9] Update data harga (incremental)...")
         n_registered = ensure_stocks_registered(all_tickers)
         if n_registered > 0:
             log.info(f"      → {n_registered} ticker baru didaftarkan ke tabel stocks")
@@ -93,13 +94,13 @@ def run_daily_scan(
         # selalu None (parameter itu efektif mati, tidak pernah terisi).
         # Urutan diubah: load dulu di sini, baru breadth bisa dihitung
         # NYATA dari data ini sebelum deteksi regime dijalankan.
-        log.info("[3/8] Load data OHLCV seluruh saham dari database...")
+        log.info("[3/9] Load data OHLCV seluruh saham dari database...")
         stock_data = _load_batch_from_db(all_tickers, days=252, max_workers=3)
         data_available_count = len(stock_data)
         log.info(f"      → {data_available_count} saham berhasil di-load")
 
         # ── Step 4: Market Breadth + Regime Detection ──────────────
-        log.info("[4/8] Menghitung market breadth & deteksi regime...")
+        log.info("[4/9] Menghitung market breadth & deteksi regime...")
         provider = MarketDataProvider()
         ihsg_df = provider.fetch_ohlcv(settings.ihsg_ticker, period="60d")
         ihsg_close = ihsg_df["close"] if ihsg_df is not None else None
@@ -120,13 +121,13 @@ def run_daily_scan(
             )
 
         # ── Step 5: Sector Rotation ────────────────────────────────
-        log.info("[5/8] Menghitung sector rotation...")
+        log.info("[5/9] Menghitung sector rotation...")
         sector_rankings = calculate_sector_rankings(stock_data)
         top_sectors = [f"#{sr.rank} {sr.sector}" for sr in sector_rankings[:3]]
         log.info(f"      → Top 3 sektor: {', '.join(top_sectors)}")
 
         # ── Step 6: Analisis TA per Saham (Parallel) ──────────────
-        log.info(f"[6/8] Analisis teknikal {len(stock_data)} saham (parallel)...")
+        log.info(f"[6/9] Analisis teknikal {len(stock_data)} saham (parallel)...")
         analyses = _analyze_all_parallel(
             stock_data=stock_data,
             ihsg_close=ihsg_close,
@@ -138,7 +139,7 @@ def run_daily_scan(
         analyzed_count = len(analyses)
 
         # ── Step 7: Filter, Sort, Funnel ────────────────────────────
-        log.info("[7/8] Filter & ranking...")
+        log.info("[7/9] Filter & ranking (pra-analog)...")
         passed = [a for a in analyses if a.passed_basic_filter]
         technical_pass_count = len(passed)
 
@@ -153,8 +154,42 @@ def run_daily_scan(
         buy = [a for a in passed if a.score.signal_type == "BUY"]
         watchlist = [a for a in passed if a.score.signal_type == "WATCHLIST"]
         avoid = [a for a in passed if a.score.signal_type == "AVOID"]
-        score_pass_count = len(strong_buy) + len(buy) + len(watchlist)
+        score_pass_count_pre_analog = len(strong_buy) + len(buy) + len(watchlist)
 
+        # ── Step 8: Analog Matching (BARU, v2.8.0) ──────────────────
+        # Cuma utk yang SUDAH lolos teknikal (strong_buy/buy/watchlist
+        # dari kategorisasi PRA-analog di atas) -- sesuai permintaan
+        # user, hindari fetch histori 3 tahun utk saham yang toh besar
+        # kemungkinan AVOID. Lihat _apply_analog_scoring() untuk detail.
+        if settings.analog_scan_enabled:
+            log.info(f"[8/9] Analog matching (K-Nearest Neighbor) utk {score_pass_count_pre_analog} kandidat...")
+            passed, analog_summary = _apply_analog_scoring(
+                passed=passed,
+                stock_data=stock_data,
+                ihsg_close=ihsg_close,
+                regime_weight=regime.regime_weight,
+                regime_label=regime.regime,
+                sector_rankings=sector_rankings,
+            )
+            log.info(
+                f"      → {analog_summary['computed']}/{analog_summary['candidates']} dihitung, "
+                f"{analog_summary['reliable']} reliable (n_analogs cukup), "
+                f"{analog_summary['errors']} error"
+            )
+
+            # Re-kategorisasi -- raw_score bisa berubah (analog_score
+            # ditambahkan), jadi urutan/signal_type WAJIB dihitung ulang,
+            # bukan cuma di-patch sebagian.
+            passed.sort(key=lambda a: a.score.raw_score, reverse=True)
+            strong_buy = [a for a in passed if a.score.signal_type == "STRONG_BUY"]
+            buy = [a for a in passed if a.score.signal_type == "BUY"]
+            watchlist = [a for a in passed if a.score.signal_type == "WATCHLIST"]
+            avoid = [a for a in passed if a.score.signal_type == "AVOID"]
+        else:
+            log.info("[8/9] Analog matching dimatikan (ANALOG_SCAN_ENABLED=False), dilewati.")
+            analog_summary = {"candidates": 0, "computed": 0, "reliable": 0, "errors": 0}
+
+        score_pass_count = len(strong_buy) + len(buy) + len(watchlist)
         top_signals = (strong_buy + buy)[:top_n]
 
         funnel = {
@@ -455,6 +490,130 @@ def _analyze_all_parallel(
         )
 
     return results
+
+
+def _apply_analog_scoring(
+    passed: list[StockAnalysis],
+    stock_data: dict[str, pd.DataFrame],
+    ihsg_close: Optional[pd.Series],
+    regime_weight: float,
+    regime_label: str,
+    sector_rankings: list,
+    max_workers: int = 3,
+) -> tuple[list[StockAnalysis], dict]:
+    """
+    Step BARU (v2.8.0): untuk saham yang SUDAH lolos filter teknikal
+    (signal_type STRONG_BUY/BUY/WATCHLIST dari analisis awal TANPA
+    analog_score), hitung K-Nearest Neighbor analog matching (lihat
+    src/signals/analog_engine.py) dan RE-RUN analyze_stock() untuk
+    ticker itu SAJA dengan analog_score terisi -- supaya raw_score/
+    signal_type akhir benar-benar mencerminkan kontribusi analog.
+
+    KENAPA 2-PASS (bukan langsung dihitung di step 6 bareng semua
+    saham): analog matching butuh histori 3 TAHUN (get_ohlcv_from_db
+    days=365*3), jauh lebih panjang dari window scan normal (252 hari)
+    -- fetch 3 tahun utk SELURUH ~550 ticker tiap hari scan akan boros
+    I/O & waktu utk saham yang toh besar kemungkinan berujung AVOID.
+    Sesuai permintaan user: cuma hitung utk yang "lolos teknikal".
+
+    Return: (passed list yang sudah diupdate utk kandidat, summary dict)
+    """
+    from src.providers.market_data import get_ohlcv_from_db
+    from src.signals.analog_engine import find_analogs, score_from_analog
+
+    candidates = [a for a in passed if a.score.signal_type in ("STRONG_BUY", "BUY", "WATCHLIST")]
+    if not candidates:
+        return passed, {"candidates": 0, "computed": 0, "reliable": 0, "errors": 0}
+
+    by_ticker = {a.ticker: a for a in passed}
+    computed_count = 0
+    reliable_count = 0
+    error_count = 0
+    error_samples = []
+
+    def process_one(analysis: StockAnalysis):
+        nonlocal error_count
+        ticker = analysis.ticker
+        try:
+            df_3y = get_ohlcv_from_db(ticker, days=365 * 3)
+            if df_3y is None or df_3y.empty:
+                return None
+
+            analog_result = find_analogs(ticker, df_3y, ihsg_close=ihsg_close)
+            analog_score = score_from_analog(analog_result)
+
+            # AUDIT (ditemukan saat integrasi): analog_engine.py punya
+            # dataclass SENDIRI (AnalogResult, field lebih lengkap --
+            # ada median_return_pct & analog_dates) terpisah dari
+            # ta_engine.py::AnalogInfo (subset field, cuma yang perlu
+            # disimpan/ditampilkan). Ini DISENGAJA (hindari ta_engine.py
+            # import analog_engine.py -> circular import, lihat docstring
+            # analyze_stock parameter analog_info) -- TAPI konsekuensinya
+            # konversi WAJIB eksplisit di sini, bukan asal oper objeknya
+            # (structural typing Python akan "jalan" tanpa ini karena
+            # kebetulan nama field yang dipakai sama, tapi itu rapuh &
+            # membingungkan pembaca kode).
+            analog_info = AnalogInfo(
+                n_analogs=analog_result.n_analogs,
+                win_rate=analog_result.win_rate,
+                avg_return_pct=analog_result.avg_return_pct,
+                reliable=analog_result.reliable,
+            )
+
+            sector_bonus = get_sector_bonus(ticker, sector_rankings)
+            # Reuse df yg SAMA dgn pass pertama (window scan normal) --
+            # cuma analog matching yang butuh histori 3 tahun terpisah,
+            # indikator inti tetap konsisten dgn seluruh sistem.
+            original_df = stock_data.get(ticker)
+            if original_df is None:
+                return None
+            updated = analyze_stock(
+                ticker=ticker,
+                df=original_df,
+                ihsg_close=ihsg_close,
+                regime_weight=regime_weight,
+                regime=regime_label,
+                sector_bonus=sector_bonus,
+                analog_score=analog_score,
+                analog_info=analog_info,
+            )
+            if updated is None:
+                return None
+            updated = apply_basic_filters(updated)
+            return updated, analog_info
+        except Exception as e:
+            error_count += 1
+            if len(error_samples) < 8:
+                error_samples.append(f"{ticker}: {type(e).__name__}: {e}")
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(process_one, a): a.ticker for a in candidates}
+        for future in concurrent.futures.as_completed(futures, timeout=600):
+            ticker = futures[future]
+            try:
+                result = future.result()
+                if result is not None:
+                    updated, analog_info = result
+                    by_ticker[ticker] = updated
+                    computed_count += 1
+                    if analog_info.reliable:
+                        reliable_count += 1
+            except Exception as e:
+                error_count += 1
+                log.debug(f"Analog scoring error {ticker}: {e}")
+
+    if error_samples:
+        log.warning(f"⚠ {error_count} ticker gagal analog scoring. Contoh: {'; '.join(error_samples)}")
+
+    updated_passed = list(by_ticker.values())
+    summary = {
+        "candidates": len(candidates),
+        "computed": computed_count,
+        "reliable": reliable_count,
+        "errors": error_count,
+    }
+    return updated_passed, summary
 
 
 def _send_signals_telegram(

@@ -163,5 +163,15 @@ class Settings(BaseSettings):
     # ternyata lebih kecil dari ini.
     broker_scan_top_n: int = 150
 
+    # ── Analog Matching / K-Nearest Neighbor (migration 008) ──────
+    # BARU (v2.8.0) -- untuk saham yang lolos filter teknikal, cari K
+    # hari historis saham itu sendiri yang kondisi teknikalnya mirip
+    # hari ini, simulasikan trade di situ (analog_engine.py). Default
+    # NONAKTIF (mengikuti pola rollout flow_score/broker_scan) -- fitur
+    # baru, belum ada validasi empiris, dan menambah waktu scan (fetch
+    # histori 3 tahun + KNN + simulasi trade utk tiap kandidat). Set
+    # True di .env/workflow setelah migration 008 dijalankan.
+    analog_scan_enabled: bool = False
+
 
 settings = Settings()

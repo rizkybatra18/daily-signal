@@ -2,6 +2,93 @@
 
 ---
 
+## v2.8.0 — Analog Matching: K-Nearest Neighbor per Saham (2026-08)
+
+### 🎯 Latar belakang
+Permintaan user: untuk saham yang lolos filter teknikal, "backtest" dulu
+perilaku historisnya di kondisi teknikal yang mirip sekarang, jadikan
+probabilitasnya sebagai bobot skor tersendiri, dan tampilkan di dashboard.
+
+### 🧠 Kenapa K-Nearest Neighbor, bukan model ML generik terlatih di
+seluruh pasar (co. XGBoost)
+Data live sistem ini baru ~368-500 baris (lihat riwayat v2.5.0 dst) --
+jauh dari cukup untuk melatih classifier tanpa overfitting parah. KNN
+per-saham cuma butuh histori 3 tahun saham itu SENDIRI (sudah tersedia
+lewat `get_ohlcv_from_db`), hasilnya bisa ditelusuri manual per analog
+(bukan kotak hitam), dan tetap genuine machine learning (KNN algoritma
+ML klasik) -- lebih jujur soal keterbatasan data yang kita punya.
+
+### ✨ `src/signals/analog_engine.py` (BARU)
+`find_analogs()`: untuk 1 ticker, cari K hari historis (default 15)
+dengan 7 dimensi teknikal (RSI/ADX/DI-diff/ATR%/BB-position/jarak-EMA20/
+CMF) paling mirip hari ini (jarak Euclidean setelah normalisasi
+z-score), lalu SIMULASIKAN TRADE di tiap analog pakai `_simulate_trade`
+yang SAMA PERSIS dengan backtest engine (single source of truth, bukan
+reimplement) -- exit TP1/TP2/SL/timeout realistis, bukan return mentah.
+Win rate & rata-rata return dari analog-analog itu = probabilitas
+empiris. `score_from_analog()`: win_rate ≤50% → 0 poin (jangan reward
+performa di bawah rata-rata), 50-100% → linear 0-5 poin. n_analogs <
+minimum (default 5) → `reliable=False`, skor dipaksa 0.
+
+**Diuji sangat ketat sebelum integrasi** -- test pertama gagal (0/12
+analog ketemu, win rate 0% padahal skrip rebound +18%), ternyata bug
+di KONSTRUKSI TEST sendiri (menyisakan 2 hari di ujung data yang tidak
+ikut direkayasa). Setelah diperbaiki: 12/12 analog yang ditemukan tepat
+di titik oversold yang disuntik, win rate 100%, avg return +5.17%
+(lebih rendah dari skrip +18% karena exit TP1/TP2 realistis memotong
+capture -- ini BENAR, bukan bug).
+
+### 🔧 Integrasi ke scoring (2-pass, hindari circular import)
+`analyze_stock()` (ta_engine.py) TIDAK memanggil analog_engine.py
+sendiri (analog_engine → backtest.engine → ta_engine, circular kalau
+ta_engine juga import analog_engine) -- `analog_score` dikirim sebagai
+PARAMETER, pola sama persis dengan `sector_bonus`. `scanner.py` jalan
+2-pass: Pass 1 = analisis normal semua saham (analog_score=0 default,
+window 252 hari). Pass 2 (BARU) = cuma untuk yang LOLOS TEKNIKAL
+(signal_type STRONG_BUY/BUY/WATCHLIST dari Pass 1) -- fetch histori 3
+tahun, hitung analog, RE-RUN analyze_stock() dengan analog_score
+terisi, lalu RE-KATEGORISASI (raw_score berubah, signal_type bisa
+ikut berubah).
+
+5 poin `analog_score` diambil dari `volume_score` (cap 20→15) --
+komponen dengan bukti PALING LEMAH sejauh ini (rho=-0.057, p=0.278,
+tidak signifikan, lihat analisis signal_results n=368). Poin internal
+`_score_volume()` diskalakan proporsional ×0.75, bukan cuma dipotong
+cap-nya (konsisten dengan pola rescaling trend_score/volatility_score
+sebelumnya).
+
+### 🐛 Bug desain ditemukan & diperbaiki SEBELUM sempat dikirim
+Sempat menduplikasi formula `score_from_analog()` di dalam
+`ta_engine.py` (supaya tidak perlu kirim parameter tambahan) -- baru
+disadari ini PERSIS pola bug "2 sumber kebenaran" yang berulang kali
+ditemukan sepanjang audit sistem ini. Diperbaiki sebelum commit: skor
+SELALU dihitung sekali di `analog_engine.py`, dikirim sebagai angka
+jadi ke `analyze_stock()`, bukan dihitung ulang. Juga: `analog_engine.py`
+(`AnalogResult`) dan `ta_engine.py` (`AnalogInfo`) sengaja punya
+dataclass TERPISAH (hindari circular import) -- konversi antara
+keduanya WAJIB eksplisit di `scanner.py`, didokumentasikan jelas
+supaya tidak dikira bug di kemudian hari.
+
+### ⚠️ Celah paritas backtest yang disengaji (didokumentasikan jujur)
+`analog_score` TIDAK disimulasikan di backtest engine -- menjalankan
+KNN untuk SETIAP hari dalam backtest (ribuan hari) akan sangat mahal
+komputasi. Backtest tetap apple-to-apple untuk 6 komponen lain, tapi
+sedikit bias ke bawah dibanding live untuk ticker dengan analog_score
+tinggi. Lihat AUDIT poin 6 di `backtest/engine.py`.
+
+### 🎛️ Dashboard & rollout
+Tab Score Breakdown & Signal Detail dapat kolom/tile "Analog Score"
+baru + bagian naratif "Analog Matching" (jumlah analog, win rate, avg
+return, penjelasan kalau tidak reliable). Score Calibration dapat
+bucket `analog_score` untuk validasi empiris nanti. **Default
+NONAKTIF** (`ANALOG_SCAN_ENABLED=False`, mengikuti pola rollout hati-hati
+broker_scan/flow_score) -- aktifkan manual setelah migration 008
+dijalankan & siap terima tambahan durasi scan (fetch 3 tahun + KNN +
+simulasi trade utk tiap kandidat lolos teknikal, bisa nambah beberapa
+menit ke total waktu scan).
+
+---
+
 ## v2.7.3 — Redesign Terminal ke SEMUA Halaman (2026-08)
 
 ### 🎨 Latar belakang

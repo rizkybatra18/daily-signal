@@ -1108,7 +1108,7 @@ def page_signal_detail():
     # angka lagi, supaya tidak basi lagi kalau cap berubah ke depannya.
     from src.signals.ta_engine import (
         TREND_SCORE_CAP, MOMENTUM_SCORE_CAP, VOLUME_SCORE_CAP,
-        STRENGTH_SCORE_CAP, VOLATILITY_SCORE_CAP, FLOW_SCORE_CAP,
+        STRENGTH_SCORE_CAP, VOLATILITY_SCORE_CAP, FLOW_SCORE_CAP, ANALOG_SCORE_CAP,
     )
     comps = [
         ("Trend",      sf(sig.get("trend_score")),      TREND_SCORE_CAP),
@@ -1117,6 +1117,7 @@ def page_signal_detail():
         ("Strength",   sf(sig.get("strength_score")),   STRENGTH_SCORE_CAP),
         ("Volatility", sf(sig.get("volatility_score")), VOLATILITY_SCORE_CAP),
         ("Flow",       sf(sig.get("flow_score")),       FLOW_SCORE_CAP),
+        ("Analog",     sf(sig.get("analog_score")),     ANALOG_SCORE_CAP),
     ]
     sector_bonus = sig.get("sector_bonus")
 
@@ -1557,16 +1558,17 @@ def page_signal_performance():
             # Import konstanta, jangan hardcode angka cap lagi di manapun.
             from src.signals.ta_engine import (
                 TREND_SCORE_CAP, MOMENTUM_SCORE_CAP, VOLUME_SCORE_CAP,
-                STRENGTH_SCORE_CAP, VOLATILITY_SCORE_CAP, FLOW_SCORE_CAP,
+                STRENGTH_SCORE_CAP, VOLATILITY_SCORE_CAP, FLOW_SCORE_CAP, ANALOG_SCORE_CAP,
             )
-            sc1, sc2, sc3, sc4, sc5, sc6b = st.columns(6)
+            sc1, sc2, sc3, sc4, sc5, sc6b, sc6c = st.columns(7)
             with sc1: st.markdown(tile("Trend Score", f"{sf(g('trend_score')):.1f}/{TREND_SCORE_CAP:.0f}"), unsafe_allow_html=True)
             with sc2: st.markdown(tile("Momentum Score", f"{sf(g('momentum_score')):.1f}/{MOMENTUM_SCORE_CAP:.0f}"), unsafe_allow_html=True)
             with sc3: st.markdown(tile("Volume Score", f"{sf(g('volume_score')):.1f}/{VOLUME_SCORE_CAP:.0f}"), unsafe_allow_html=True)
             with sc4: st.markdown(tile("Strength Score", f"{sf(g('strength_score')):.1f}/{STRENGTH_SCORE_CAP:.0f}"), unsafe_allow_html=True)
             with sc5: st.markdown(tile("Volatility Score", f"{sf(g('volatility_score')):.1f}/{VOLATILITY_SCORE_CAP:.0f}"), unsafe_allow_html=True)
             with sc6b: st.markdown(tile("Flow Score", f"{sf(g('flow_score')):.1f}/{FLOW_SCORE_CAP:.0f}"), unsafe_allow_html=True)
-            st.caption("Flow Score: proxy bandarmology gratis (OBV/CMF/MFI/VSA) — BARU, belum tervalidasi empiris.")
+            with sc6c: st.markdown(tile("Analog Score", f"{sf(g('analog_score')):.1f}/{ANALOG_SCORE_CAP:.0f}"), unsafe_allow_html=True)
+            st.caption("Flow & Analog Score: BARU, belum tervalidasi empiris — lihat penjelasan Analog Matching di bawah.")
             st.markdown("")
             sc6, sc7, sc8, sc9, sc10 = st.columns(5)
             with sc6: st.markdown(tile("Sector Bonus", f"{sf(g('sector_bonus')):+.1f}"), unsafe_allow_html=True)
@@ -1627,6 +1629,45 @@ def page_signal_performance():
                     "dan trend_structure — keduanya BARU, belum ada validasi empiris jangka panjang."
                 )
 
+            # ── Analog Matching narrative (BARU, v2.8.0) ──────────
+            analog_n = g("analog_n")
+            if analog_n is not None:
+                st.markdown("")
+                section("ANALOG MATCHING (K-Nearest Neighbor)", "🧭")
+                a_reliable = g("analog_reliable")
+                a_win_rate = sf(g("analog_win_rate"))
+                a_avg_return = sf(g("analog_avg_return"))
+                a_score = sf(g("analog_score"))
+
+                ac1, ac2, ac3, ac4 = st.columns(4)
+                with ac1: st.markdown(tile("Jumlah Analog", f"{si(analog_n)} hari"), unsafe_allow_html=True)
+                with ac2: st.markdown(tile("Win Rate Analog", f"{a_win_rate:.0f}%"), unsafe_allow_html=True)
+                with ac3: st.markdown(tile("Avg Return Analog", f"{a_avg_return:+.2f}%"), unsafe_allow_html=True)
+                with ac4: st.markdown(tile("Kontribusi Skor", f"{a_score:.1f}/5"), unsafe_allow_html=True)
+
+                if a_reliable:
+                    st.markdown(
+                        f'<div class="ds-card" style="border-left:3px solid var(--cyan)">'
+                        f'<span style="color:#9aa4b8;font-size:.85rem">'
+                        f'Dari {si(analog_n)} hari historis SAHAM INI SENDIRI dengan kondisi teknikal paling mirip hari ini, '
+                        f'{a_win_rate:.0f}% berakhir profit (rata-rata {a_avg_return:+.2f}%) setelah disimulasikan dengan aturan '
+                        f'exit yang sama seperti backtest (TP1/TP2/SL realistis).</span></div>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(
+                        f'<div class="ds-card" style="border-left:3px solid var(--text-faint)">'
+                        f'<span style="color:#9aa4b8;font-size:.85rem">'
+                        f'Analog historis yang ditemukan cuma {si(analog_n)} hari — di bawah ambang minimum untuk dipercaya. '
+                        f'Kontribusi ke skor dipaksa 0, bukan dipaksakan jadi angka yang tidak reliable.</span></div>',
+                        unsafe_allow_html=True
+                    )
+                st.caption(
+                    "K-Nearest Neighbor per-saham (bukan model ML generik terlatih di seluruh pasar) — BARU, belum "
+                    "ada validasi empiris. n kecil = probabilitas noisy, treat sebagai hipotesis bukan fakta. "
+                    "Lihat src/signals/analog_engine.py untuk metodologi & keterbatasan lengkap."
+                )
+
         with tab_e:
             reasons = g("reasons")
             if isinstance(reasons, str):
@@ -1673,6 +1714,7 @@ def page_signal_performance():
             ("trend_score",      [-1, 8, 14, 18, 22],       ["0-8", "8-14", "14-18", "18-22"]),
             ("volatility_score", [-1, 0.5, 1, 1.5, 2],      ["0-0.5 (rendah)", "0.5-1", "1-1.5", "1.5-2 (tinggi)"]),
             ("flow_score",       [-1, 2, 5, 8, 10],         ["0-2", "2-5", "5-8", "8-10"]),
+            ("analog_score",     [-1, 0, 2, 3.5, 5],        ["0 (tak reliable)", "0-2", "2-3.5", "3.5-5"]),
             ("minus_di",         [0, 10, 15, 20, 100],       ["<10", "10-14", "15-19", "20+"]),
             ("adx",              [0, 20, 25, 30, 40, 100],   ["<20", "20-24", "25-29", "30-39", "40+"]),
         ]
