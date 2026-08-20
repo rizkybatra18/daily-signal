@@ -718,7 +718,22 @@ def render_sidebar():
 
         labels = [f"{icon}  {name}" for _, icon, name in PAGES]
         keys   = [k for k, _, _ in PAGES]
-        choice = st.radio("nav", labels, label_visibility="collapsed")
+
+        # AUDIT (2026-08, ditemukan saat audit menyeluruh): SEBELUMNYA
+        # radio ini tidak sinkron kalau navigasi terjadi lewat
+        # nav_override (F-key bar di render_terminal_bar(), tombol "→"
+        # di Top Signals) -- konten halaman pindah, tapi sidebar tetap
+        # menunjuk pilihan lama (radio Streamlit tanpa `key` eksplisit
+        # tidak tahu-menahu soal nav_override). Diperbaiki: PEEK (bukan
+        # pop -- main() yang pop, di bawah) nav_override sebelum widget
+        # dirender, paksa session_state key radio ikut supaya widget
+        # menampilkan pilihan yang benar sejak awal render.
+        if "nav_override" in st.session_state:
+            target_key = st.session_state["nav_override"]
+            if target_key in keys:
+                st.session_state["nav_radio"] = labels[keys.index(target_key)]
+
+        choice = st.radio("nav", labels, key="nav_radio", label_visibility="collapsed")
         page = keys[labels.index(choice)]
 
         st.markdown("<hr class='ds-hr'>", unsafe_allow_html=True)

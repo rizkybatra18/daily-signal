@@ -2,6 +2,65 @@
 
 ---
 
+## v2.8.1 — Audit Menyeluruh #2 + Enable Semua Fitur (2026-08)
+
+### 🎯 Latar belakang
+Audit hulu-ke-hilir kedua (audit #1 di v2.5.1), fokus ke perubahan
+sejak itu: broker summary, Net Buy Window, candlestick+zona, redesign
+terminal, analog matching. Sekalian atas instruksi eksplisit user:
+semua fitur yang tadinya opt-in (default off) diaktifkan.
+
+### 🐛 Bug ditemukan & diperbaiki
+1. **Sidebar tidak sinkron dengan navigasi F-key/tombol "→"** —
+   `st.radio` di sidebar tanpa `key` eksplisit tidak tahu-menahu soal
+   `nav_override` (dipakai F-key bar sejak v2.7.3, dan tombol "→" di
+   Top Signals sejak lebih lama). Akibatnya: klik F3 pindah ke halaman
+   Signal Detail, tapi sidebar tetap menyorot halaman lama — salah
+   penyajian navigasi. Diperbaiki: sidebar `peek` (bukan pop) ke
+   `nav_override` sebelum widget radio dirender, paksa session-state
+   key-nya ikut sebelum ditampilkan.
+2. **`bulk_insert_broker_summary` rawan kehilangan data diam-diam** —
+   pola BUG YANG SAMA PERSIS dengan yang diperbaiki di
+   `_upsert_with_schema_fallback` (audit #1): retry loop cuma coba
+   ulang batch yang SAMA 3x, kalau penyebabnya kolom hilang di schema
+   (migration 004 versi lama, sebelum revisi skema vendor IDX Edge
+   PRO), retry identik akan SELALU gagal dan SELURUH batch (sampai 100
+   baris) hilang diam-diam tanpa partial-save. Ini jadi risiko NYATA
+   sekarang karena broker scan baru saja diaktifkan default. Diperbaiki
+   dengan logic sama: deteksi kolom hilang dari pesan error, buang dari
+   SEMUA baris di batch, retry. **Dibuktikan dengan test**: 3 kolom
+   hilang sekaligus, 2 baris tetap tersimpan (sebelumnya: 0).
+
+### ✅ Area yang dicek, tidak ada masalah baru
+`_apply_analog_scoring` (thread-safety counter minor, tidak
+berdampak), `apply_basic_filters` (idempotent, aman dipanggil ulang),
+alur `ihsg_close` lewat pipeline analog (konsisten), Net Buy Window
+widget params, candlestick zone date handling, migration 008 syntax,
+`bulk_insert_prices`/`upsert_stock` (pola retry sama tapi tabel tidak
+pernah direvisi skemanya sejak migration 001 — risiko jauh lebih
+rendah, dicatat tapi tidak diprioritaskan).
+
+### ⚙️ Semua fitur diaktifkan (instruksi eksplisit user)
+- `BROKER_SCAN_ENABLED` — sudah aktif sejak v2.6.0, dikonfirmasi tetap aktif
+- `ANALOG_SCAN_ENABLED` — diubah `false`→`true` di `daily_scan.yml`
+- Default Python di `config.py` untuk `broker_scan_enabled` &
+  `analog_scan_enabled` diubah ke `True` (sebelumnya `False`) —
+  konsisten dengan workflow production, `ARJUM_IDX_EDGE_API_KEY` TETAP
+  tanpa default (kredensial, tidak boleh ada nilai default di source code)
+- `run_daily_scan()` summary sekarang menyertakan ringkasan analog
+  matching (`candidates`/`computed`/`reliable`/`errors`), sebelumnya
+  cuma muncul di log terpisah
+
+### ⚠️ Yang perlu diperhatikan sebelum scan berikutnya
+Migration 008 WAJIB sudah dijalankan di Supabase sebelum
+`ANALOG_SCAN_ENABLED=true` benar-benar berguna — kalau belum, kolom
+`analog_*` akan otomatis dilewati (berkat fix di atas), scan TIDAK
+gagal, tapi datanya juga tidak tersimpan. Analog matching menambah
+durasi scan (fetch histori 3 tahun + KNN + simulasi trade untuk tiap
+kandidat lolos teknikal) — pantau durasi scan beberapa hari pertama.
+
+---
+
 ## v2.8.0 — Analog Matching: K-Nearest Neighbor per Saham (2026-08)
 
 ### 🎯 Latar belakang

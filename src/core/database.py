@@ -675,18 +675,47 @@ def bulk_insert_broker_summary(rows: list[dict], source_provider: str) -> int:
 
     for i in range(0, len(payload), batch_size):
         batch = payload[i:i + batch_size]
-        for attempt in range(3):
+        # AUDIT (2026-08, ditemukan saat audit menyeluruh): SEBELUMNYA
+        # retry loop cuma coba ulang BATCH YANG SAMA 3x dengan backoff --
+        # kalau kegagalannya karena KOLOM HILANG di schema (co. migration
+        # 004 belum di-update ke revisi terbaru), retry identik akan
+        # SELALU gagal juga, dan SELURUH batch (sampai 100 baris) hilang
+        # diam-diam. Ini persis pola bug yang sudah diperbaiki di
+        # _upsert_with_schema_fallback() -- diperbaiki di sini juga
+        # dengan logic yang sama: deteksi kolom hilang dari pesan error,
+        # buang kolom itu dari SEMUA baris di batch, baru retry.
+        import re as _re
+        current_batch = batch
+        max_attempts = len(current_batch[0].keys()) + 3 if current_batch else 3
+        for attempt in range(max_attempts):
             try:
                 db.table("broker_summary").upsert(
-                    batch, on_conflict="ticker,trade_date,broker_code"
+                    current_batch, on_conflict="ticker,trade_date,broker_code"
                 ).execute()
-                total_inserted += len(batch)
+                total_inserted += len(current_batch)
                 _time.sleep(0.1)
                 break
             except Exception as e:
                 err_str = str(e)
-                if attempt < 2:
-                    _time.sleep((attempt + 1) * 1.0)
+                if "PGRST204" in err_str or "could not find" in err_str.lower():
+                    match = _re.search(r"'([a-zA-Z_][a-zA-Z0-9_]*)' column", err_str)
+                    bad_col = match.group(1) if match else None
+                    if bad_col and bad_col in current_batch[0]:
+                        from src.core.logger import get_logger
+                        log = get_logger("database")
+                        log.warning(
+                            f"Kolom '{bad_col}' belum ada di tabel 'broker_summary' "
+                            f"(migration 004 versi lama?). Kolom ini dilewati untuk "
+                            f"batch ini — data lain tetap disimpan."
+                        )
+                        current_batch = [
+                            {k: v for k, v in row.items() if k != bad_col}
+                            for row in current_batch
+                        ]
+                        continue
+
+                if attempt < max_attempts - 1:
+                    _time.sleep(min(attempt + 1, 3) * 1.0)
                     continue
                 from src.core.logger import get_logger
                 log = get_logger("database")

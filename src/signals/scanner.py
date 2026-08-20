@@ -246,6 +246,7 @@ def run_daily_scan(
             "regime": regime.regime,
             "duration_seconds": round(duration, 1),
             "funnel": funnel,
+            "analog": analog_summary,
         }
 
         update_scan_run(run_id, {
