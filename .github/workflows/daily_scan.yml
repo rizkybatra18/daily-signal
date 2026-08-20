@@ -58,6 +58,14 @@ jobs:
       # banyak sinyal (observasi nyata: 98 saham lolos WATCHLIST+ dalam
       # 1 hari), turunkan kalau kuota vendor ternyata lebih kecil.
       BROKER_SCAN_TOP_N: "150"
+      # Analog Matching / K-Nearest Neighbor (migration 008, v2.8.0).
+      # DIAKTIFKAN atas instruksi eksplisit user (2026-08) -- SEBELUMNYA
+      # sengaja "false" (fitur baru, belum tervalidasi, nambah durasi
+      # scan). WAJIB migration 008 sudah dijalankan di Supabase SEBELUM
+      # ini aktif, kalau belum: kolom analog_* akan otomatis dilewati
+      # oleh _upsert_with_schema_fallback (lihat AUDIT database.py) --
+      # TIDAK bikin scan gagal, tapi datanya juga tidak akan tersimpan.
+      ANALOG_SCAN_ENABLED: "true"
 
     steps:
       - uses: actions/checkout@v4
